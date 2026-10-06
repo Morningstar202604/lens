@@ -1,0 +1,37 @@
+# Lens 配置文件
+# 复制到 ~/.lens/config.toml 进行自定义
+
+[proxy]
+# 代理监听地址
+bind = "127.0.0.1:9999"
+# TLS 证书存储目录
+cert_dir = "certs"
+# 是否拦截 HTTPS（需要信任 CA 证书）
+intercept_https = true
+
+[view]
+# 可视化面板监听地址
+bind = "127.0.0.1:7317"
+# 是否自动打开浏览器
+open_browser = true
+
+[storage]
+# SQLite 数据库路径（默认在数据目录下）
+# database = "~/.lens/lens.db"
+
+[agents]
+# 各平台适配器的额外配置
+[agents.opencode]
+enabled = true
+
+[agents.codex]
+enabled = true
+
+[agents.claude_code]
+enabled = true
+
+[ai]
+# AI 摘要功能配置
+# provider = "openai"   # openai | anthropic
+# model = "gpt-4o-mini"
+# api_key_env = "OPENAI_API_KEY"
