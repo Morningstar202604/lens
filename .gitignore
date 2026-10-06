@@ -1,6 +1,10 @@
 target/
 node_modules/
+frontend/node_modules/
 .env
 *.log
 *.db
 .DS_Store
+certs/
+*.pem
+*.key
