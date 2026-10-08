@@ -368,6 +368,36 @@ impl Store {
         conn.execute_batch("DELETE FROM turns; DELETE FROM sessions; DELETE FROM nodes; DELETE FROM edges;")?;
         Ok(())
     }
+
+    /// 返回全部节点（用于预填充的图谱数据）
+    pub fn list_all_nodes(&self) -> Result<Vec<GraphNode>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
+        let mut stmt = conn.prepare("SELECT id, label, kind, weight FROM nodes ORDER BY weight DESC")?;
+        let rows = stmt.query_map([], |r| {
+            Ok(GraphNode {
+                id: r.get(0)?,
+                label: r.get(1)?,
+                kind: r.get(2)?,
+                weight: r.get(3)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(|e| e.into())
+    }
+
+    /// 返回全部边
+    pub fn list_all_edges(&self) -> Result<Vec<GraphEdge>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
+        let mut stmt = conn.prepare("SELECT source, target, relation, weight FROM edges ORDER BY weight DESC")?;
+        let rows = stmt.query_map([], |r| {
+            Ok(GraphEdge {
+                source: r.get(0)?,
+                target: r.get(1)?,
+                relation: r.get(2)?,
+                weight: r.get(3)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(|e| e.into())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

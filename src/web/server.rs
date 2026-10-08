@@ -28,7 +28,9 @@ pub async fn serve(bind: &str, data_dir: &PathBuf) -> Result<()> {
         .route("/api/sessions/:id", get(get_session))
         .route("/api/sessions/:id/summary", get(get_session_summary))
         .route("/api/sessions/:id/graph", get(get_session_graph))
+        .route("/api/graph", get(get_global_graph))
         .route("/api/stats", get(get_stats))
+        .route("/demo/novel", get(novel_demo_handler))
         .nest_service("/assets", ServeDir::new(web_dir.join("assets")))
         .fallback(index_handler)
         .layer(
@@ -115,6 +117,16 @@ async fn get_session_graph(
     Ok(Json(serde_json::json!({ "nodes": nodes, "edges": edges })))
 }
 
+async fn get_global_graph(
+    State(store): State<Arc<Store>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // 直接读取 nodes/edges 表（包含预填充的图谱数据）
+    let store2 = store.clone();
+    let nodes = blocking(move || store.list_all_nodes()).await?;
+    let edges = blocking(move || store2.list_all_edges()).await?;
+    Ok(Json(serde_json::json!({ "nodes": nodes, "edges": edges })))
+}
+
 async fn get_session_summary(
     State(store): State<Arc<Store>>,
     Path(id): Path<String>,
@@ -137,6 +149,24 @@ async fn get_stats(
     let data_dir = store.data_dir();
     let stats = blocking(move || store.compute_stats(&data_dir)).await?;
     Ok(Json(stats))
+}
+
+async fn novel_demo_handler() -> Result<Html<String>, AppError> {
+    let mut candidates = vec![std::env::current_dir()
+        .map(|d| d.join("web/novel_graph.html"))
+        .unwrap_or_default()];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            candidates.push(exe_dir.join("../web/novel_graph.html"));
+            candidates.push(exe_dir.join("web/novel_graph.html"));
+        }
+    }
+    for p in &candidates {
+        if let Ok(html) = std::fs::read_to_string(p) {
+            return Ok(Html(html));
+        }
+    }
+    Err(anyhow::anyhow!("novel_graph.html not found: checked {:?}", candidates).into())
 }
 
 #[derive(Debug)]
