@@ -6,5 +6,7 @@ frontend/node_modules/
 *.db
 .DS_Store
 certs/
+demo_data/certs/
 *.pem
 *.key
+# CA 私钥决不能入仓 — 一旦提交攻击者可签伪证书 MITM 任意域名

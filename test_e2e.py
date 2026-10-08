@@ -128,10 +128,13 @@ def check_recorded_data():
     return turns > 0
 
 def main():
-    os.chdir("/mnt/data/catpaw/home/workspace/001/lens")
+    # Default to the project root (parent of test_e2e.py if run from elsewhere)
+    project_root = os.environ.get("LENS_PROJECT_ROOT", os.path.dirname(os.path.abspath(__file__)))
+    os.chdir(project_root)
 
     print("=" * 60)
-    print("Lens E2E Test: Proxy recording → Turn persistence → Graph")
+    print(f"Lens E2E Test: Proxy recording → Turn persistence → Graph")
+    print(f"Project root: {os.getcwd()}")
     print("=" * 60)
 
     # 0. Cleanup

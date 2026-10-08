@@ -56,3 +56,57 @@ pub fn identify(headers: &std::collections::HashMap<String, String>, body: &[u8]
 
     AgentKind::Unknown("unidentified".to_string())
 }
+
+/// 根据已识别的 agent 类型提取上下文 metadata。
+///
+/// 返回的 key-value 对被写入 `LlmRequest.metadata`，
+/// 用于后续的会话分析和图谱构建。
+pub fn extract_context(
+    kind: &AgentKind,
+    headers: &std::collections::HashMap<String, String>,
+    body: &str,
+) -> Vec<(String, String)> {
+    let mut result = Vec::new();
+    let json: Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return result,
+    };
+
+    match kind {
+        AgentKind::Codex => {
+            let ctx = codex::extract_context(&json);
+            if let Some(id) = ctx.previous_id {
+                result.push(("codex.previous_response_id".into(), id));
+            }
+            if let Some(store) = ctx.store {
+                result.push(("codex.store".into(), store.to_string()));
+            }
+            if let Some(effort) = ctx.model_reasoning_effort {
+                result.push(("codex.reasoning_effort".into(), effort));
+            }
+            result.push(("codex.is_responses_api".into(), "true".into()));
+        }
+        AgentKind::ClaudeCode => {
+            let ctx = claude_code::extract_context(&json, headers);
+            if let Some(betas) = ctx.betas {
+                result.push(("claude.betas".into(), betas.join(",")));
+            }
+            if let Some(container) = ctx.container_id {
+                result.push(("claude.container_id".into(), container));
+            }
+            let num_blocks = ctx.system_blocks.as_ref().map(|b| b.len()).unwrap_or(0);
+            result.push(("claude.system_blocks".into(), num_blocks.to_string()));
+        }
+        AgentKind::OpenCode => {
+            if let Some(ws) = json["workspace"].as_str() {
+                result.push(("opencode.workspace".into(), ws.into()));
+            }
+            if let Some(session) = json["session_id"].as_str() {
+                result.push(("opencode.session_id".into(), session.into()));
+            }
+        }
+        _ => {}
+    }
+
+    result
+}

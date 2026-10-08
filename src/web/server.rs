@@ -31,7 +31,17 @@ pub async fn serve(bind: &str, data_dir: &PathBuf) -> Result<()> {
         .route("/api/stats", get(get_stats))
         .nest_service("/assets", ServeDir::new(web_dir.join("assets")))
         .fallback(index_handler)
-        .layer(CorsLayer::permissive())
+        .layer(
+            CorsLayer::new()
+                .allow_origin(
+                    ["http://127.0.0.1:7317", "http://localhost:7317"]
+                        .iter()
+                        .filter_map(|s| s.parse().ok())
+                        .collect::<Vec<_>>(),
+                )
+                .allow_methods([axum::http::Method::GET])
+                .allow_headers([axum::http::header::CONTENT_TYPE]),
+        )
         .with_state(store);
 
     let listener = TcpListener::bind(&addr).await?;
@@ -47,18 +57,22 @@ pub async fn serve(bind: &str, data_dir: &PathBuf) -> Result<()> {
 }
 
 async fn index_handler() -> Result<Html<String>, AppError> {
-    let paths = [
-        std::env::current_dir()
-            .map(|d| d.join("web/index.html"))
-            .unwrap_or_default(),
-        PathBuf::from("/mnt/data/catpaw/home/workspace/001/lens/web/index.html"),
-    ];
-    for p in &paths {
+    // 依次尝试：当前工作目录下的 web/ → 可执行文件所在目录的 ../web/
+    let mut candidates = vec![std::env::current_dir()
+        .map(|d| d.join("web/index.html"))
+        .unwrap_or_default()];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            candidates.push(exe_dir.join("../web/index.html"));
+            candidates.push(exe_dir.join("web/index.html"));
+        }
+    }
+    for p in &candidates {
         if let Ok(html) = std::fs::read_to_string(p) {
             return Ok(Html(html));
         }
     }
-    Err(anyhow::anyhow!("index.html not found").into())
+    Err(anyhow::anyhow!("index.html not found: checked {:?}", candidates).into())
 }
 
 #[derive(Debug, Deserialize)]

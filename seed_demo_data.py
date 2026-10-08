@@ -6,7 +6,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timedelta
 
-DB_PATH = "/mnt/data/catpaw/home/workspace/001/lens/demo_data/lens.db"
+DEFAULT_DB_PATH = "./demo_data/lens.db"
 
 def create_schema(conn):
     conn.executescript("""
@@ -92,9 +92,11 @@ def insert_session(conn, sid, title, project_path, created_at, updated_at):
 
 def main():
     import os
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    import sys
+    db_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_DB_PATH
+    os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(db_path)
     create_schema(conn)
 
     base_time = datetime(2026, 10, 6, 14, 0, 0)
@@ -257,7 +259,7 @@ def main():
     conn.commit()
     conn.close()
 
-    print(f"✅ 数据填充完成: {DB_PATH}")
+    print(f" 数据填充完成: {db_path}")
     print(f"   3 sessions, 11 turns")
     print(f"   Sessions: trae-auth-module, opencode-gateway-bug, codex-ui-upgrade")
 

@@ -22,6 +22,9 @@ impl Store {
         std::fs::create_dir_all(data_dir)?;
         let db_path = data_dir.join("lens.db");
         let conn = rusqlite::Connection::open(&db_path)?;
+        // WAL 模式：允许并发读取，写入不阻塞读
+        conn.pragma_update(None, "journal_mode", "wal")?;
+        conn.pragma_update(None, "foreign_keys", "on")?;
         info!("数据库: {}", db_path.display());
 
         let store = Self {
@@ -80,13 +83,21 @@ impl Store {
         Ok(store)
     }
 
-    /// 记录一次 LLM 调用（同步接口，内部用 block_in_place）
-    pub fn record_turn(&self, agent_type: &str, request: LlmRequest, response: LlmResponse) -> Result<()> {
+    /// 记录一次 LLM 调用（同步接口）
+    ///
+    /// 使用 SQLite 事务保护：session upsert + turn insert 原子性提交。
+    pub fn record_turn(
+        &self,
+        agent_type: &str,
+        request: LlmRequest,
+        response: LlmResponse,
+    ) -> Result<()> {
         let session_id = Self::extract_session_id(&request);
 
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
+        let mut conn = self.conn.lock().map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
 
-        conn.execute(
+        let tx = conn.transaction()?;
+        tx.execute(
             "INSERT INTO sessions (id, title, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
              ON CONFLICT(id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP",
             params![&session_id, &session_id],
@@ -95,25 +106,26 @@ impl Store {
         let request_json = serde_json::to_string(&request)?;
         let response_json = serde_json::to_string(&response)?;
         // 优先使用从代理层传入的 agent_type，fallback 到请求体检测
-        let agent_type = if agent_type != "unknown" && !agent_type.is_empty() {
+        let resolved_agent = if agent_type != "unknown" && !agent_type.is_empty() {
             agent_type.to_string()
         } else {
             Self::detect_agent_type(&request)
         };
 
-        conn.execute(
+        tx.execute(
             "INSERT INTO turns (id, session_id, agent_type, timestamp, request_json, response_json)
              VALUES (?, ?, ?, ?, ?, ?)",
             params![
                 &request.id,
                 &session_id,
-                &agent_type,
+                &resolved_agent,
                 &request.timestamp,
                 &request_json,
                 &response_json,
             ],
         )?;
 
+        tx.commit()?;
         Ok(())
     }
 
@@ -275,9 +287,17 @@ impl Store {
 
     fn extract_session_id(request: &LlmRequest) -> String {
         if let Some(cwd) = request.metadata.get("cwd") {
-            return format!("session-{}", cwd.replace('/', "-"));
+            // 对 cwd 取 SHA-256 前缀，防止不同路径碰撞（如 /a/b-c vs /a/b/c）
+            let hash = {
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut h = DefaultHasher::new();
+                cwd.hash(&mut h);
+                h.finish()
+            };
+            return format!("session-{:016x}", hash);
         }
-        format!("session-{}", &request.id[..8])
+        format!("session-{}", &request.id[..8.min(request.id.len())])
     }
 
     fn detect_agent_type(request: &LlmRequest) -> String {

@@ -142,6 +142,13 @@ impl CertManager {
 
         std::fs::write(cert_path, &cert_pem)
             .with_context(|| format!("写入 CA 证书失败: {}", cert_path.display()))?;
+        // CA 私钥必须设为仅当前用户可读（0600），防止其他用户窃取签伪证书
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
+                .with_context(|| format!("设置 CA 密钥权限失败: {}", key_path.display()))?;
+        }
         std::fs::write(key_path, &key_pem)
             .with_context(|| format!("写入 CA 密钥失败: {}", key_path.display()))?;
 

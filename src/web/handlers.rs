@@ -1,2 +1,2 @@
-// API handlers are defined in server.rs for cohesion.
-// This module reserved for future API expansion.
+// Handlers intentionally kept in `server.rs` for module cohesion.
+// See: https://github.com/badhope/lens/issues — file new issues for API extensions.

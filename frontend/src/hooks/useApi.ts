@@ -1,24 +1,10 @@
-import { useState, useEffect, useCallback } from 'preact/hooks';
-
-export function useApi<T>(
-  fn: () => Promise<T>,
-  deps: unknown[] = [],
-): { data: T | null; loading: boolean; error: string | null; refresh: () => void } {
-  const [data, setData] = useState<T | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchData = useCallback(() => {
-    setLoading(true);
-    setError(null);
-    fn()
-      .then(setData)
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
-
-  useEffect(fetchData, [fetchData]);
-
-  return { data, loading, error, refresh: fetchData };
-}
+//! Dead-code placeholder.
+//!
+//! This hook was defined but never used by any component.
+//! `TimelineView` / `DashboardView` / `Sidebar` each fetch their own data
+//! through the imperative helpers in `lib/api.ts`.  Keeping this module only
+//! to silence the `unused` warning would be misleading — it is not wired up.
+//!
+//! TODO: adopt `useApi` (or a Query library like `@tanstack/react-query`) across
+//! all fetchers for consistent caching / loading / error state.
+export {};

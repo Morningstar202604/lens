@@ -1,5 +1,13 @@
 import { render } from 'preact';
-import { App } from './App';
+import { App, ErrorBoundary } from './App';
 import './index.css';
 
-render(<App />, document.getElementById('app')!);
+const root = document.getElementById('app');
+if (root) {
+  render(
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>,
+    root
+  );
+}

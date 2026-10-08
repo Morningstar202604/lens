@@ -1,149 +1,170 @@
-import { useState, useEffect, useCallback } from 'preact/hooks';
-import type { SessionSummary, SessionDetail, Stats, GraphData } from './types';
-import { api } from './lib/api';
-import { useApi } from './hooks/useApi';
-import { Sidebar } from './components/Sidebar';
-import { TimelineView } from './components/TimelineView';
-import { DashboardView } from './components/DashboardView';
-import { GraphView } from './components/GraphView';
+import { Component, createElement } from "preact";
+import { useEffect, useRef, useState } from "preact/hooks";
+import type { SessionSummary } from "./types";
+import { searchSessions } from "./lib/api";
+import { DashboardView } from "./components/DashboardView";
+import { Sidebar } from "./components/Sidebar";
+import { TimelineView } from "./components/TimelineView";
+import { GraphView } from "./components/GraphView";
 
-type Tab = 'timeline' | 'dashboard' | 'graph';
+type Tab = "dashboard" | "session" | "graph";
+
+// ── ErrorBoundary catches render-time exceptions to prevent full-app white-screen.
+interface ErrorBoundaryState {
+  error: Error | null;
+}
+
+export class ErrorBoundary extends Component<{}, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: any) {
+    console.error("[Lens] 渲染异常:", error, info?.componentStack);
+  }
+
+  render() {
+    if (this.state.error) {
+      return createElement(
+        "div",
+        {
+          class:
+            "min-h-screen flex items-center justify-center bg-bg text-text p-6",
+        },
+        createElement(
+          "div",
+          { class: "text-center space-y-3" },
+          createElement(
+            "h1",
+            { class: "text-xl font-bold text-red-400" },
+            "界面发生错误"
+          ),
+          createElement(
+            "p",
+            { class: "text-sm text-text-3 font-mono" },
+            this.state.error.message
+          ),
+          createElement(
+            "button",
+            {
+              class: "px-4 py-2 rounded bg-primary text-white",
+              onClick: () => this.setState({ error: null }),
+            },
+            "重试"
+          )
+        )
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export function App() {
-  const [tab, setTab] = useState<Tab>('timeline');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [stats, setStats] = useState<Stats | null>(null);
-  const [detail, setDetail] = useState<SessionDetail | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [graph, setGraph] = useState<GraphData | null>(null);
-  const [graphLoading, setGraphLoading] = useState(false);
+  const [tab, setTab] = useState<Tab>("dashboard");
+  const [selectedSession, setSelectedSession] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  // Fetch sessions + stats on mount and on search change
-  const loadSessions = useCallback(async () => {
-    try {
-      const [s, st] = await Promise.all([
-        searchQuery ? api.searchSessions(searchQuery) : api.listSessions(),
-        api.getStats(),
-      ]);
-      setSessions(s);
-      setStats(st);
-    } catch (e) {
-      console.error('Failed to load sessions:', e);
+  // Error state + ref to track consecutive failures for exponential backoff.
+  const failCount = useRef(0);
+  const intervalId = useRef<number | null>(null);
+
+  // Load sessions with visibility-aware polling and exponential backoff.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      // Pause polling when tab is hidden to save resources.
+      if (typeof document !== "undefined" && document.hidden) return;
+      try {
+        const data = await searchSessions(searchQuery, 100);
+        if (!cancelled) {
+          setSessions(data);
+          setError(null);
+          failCount.current = 0;
+          setLoading(false);
+        }
+      } catch (e: any) {
+        if (!cancelled) {
+          failCount.current += 1;
+          setError(e.message || String(e));
+        }
+      }
     }
+
+    // Initial load
+    load();
+
+    // Polling interval grows on consecutive failures: 3s → 6s → 12s → max 30s.
+    function scheduleNext() {
+      const backoff = Math.min(3000 * Math.pow(2, failCount.current - 1), 30000);
+      intervalId.current = window.setTimeout(() => {
+        load().then(scheduleNext);
+      }, backoff);
+    }
+
+    scheduleNext();
+
+    return () => {
+      cancelled = true;
+      if (intervalId.current !== null) clearTimeout(intervalId.current);
+    };
   }, [searchQuery]);
 
-  useEffect(() => {
-    loadSessions();
-    // Poll every 5s for live updates
-    const id = setInterval(loadSessions, 5000);
-    return () => clearInterval(id);
-  }, [loadSessions]);
-
-  // Load session detail when selected
-  useEffect(() => {
-    if (!selectedId) {
-      setDetail(null);
-      setGraph(null);
-      return;
-    }
-    setDetailLoading(true);
-    api
-      .getSession(selectedId)
-      .then(setDetail)
-      .catch((e) => console.error('Failed to load session:', e))
-      .finally(() => setDetailLoading(false));
-  }, [selectedId]);
-
-  // Load graph when graph tab is active
-  useEffect(() => {
-    if (tab !== 'graph' || !selectedId) {
-      setGraph(null);
-      return;
-    }
-    setGraphLoading(true);
-    api
-      .getGraph(selectedId)
-      .then(setGraph)
-      .catch((e) => console.error('Failed to load graph:', e))
-      .finally(() => setGraphLoading(false));
-  }, [tab, selectedId]);
-
-  const handleSearch = useCallback((q: string) => {
-    setSearchQuery(q);
-  }, []);
-
-  const handleSelect = useCallback((id: string) => {
-    setSelectedId(id);
-    setTab('timeline');
-  }, []);
+  function selectSession(id: string) {
+    setSelectedSession(id);
+    setTab("session");
+  }
 
   return (
-    <div class="flex h-screen w-screen overflow-hidden">
+    <div class="flex h-screen bg-bg text-text">
       <Sidebar
         sessions={sessions}
-        stats={stats}
-        selectedId={selectedId}
+        onSelect={selectSession}
+        selectedId={selectedSession}
         searchQuery={searchQuery}
-        onSearch={handleSearch}
-        onSelect={handleSelect}
+        onSearch={setSearchQuery}
       />
 
-      <main class="flex-1 flex flex-col overflow-hidden bg-bg">
-        {/* Top bar */}
-        <div class="flex items-center gap-4 px-6 py-3 border-b border-border bg-bg-elev min-h-[52px]">
-          <div class="flex-1 min-w-0">
-            <h2 class="text-base font-semibold truncate">
-              {detail?.title || stats?.total_sessions ? '总览' : 'Lens'}
-            </h2>
-            {detail && (
-              <div class="text-sm text-text-3 mt-0.5 truncate">{detail.project_path}</div>
-            )}
-          </div>
-          {stats && (
-            <div class="flex gap-6">
-              <TopStat value={stats.total_sessions} label="会话" />
-              <TopStat value={stats.total_turns} label="调用" />
-              <TopStat value={stats.total_tokens} label="Tokens" />
-            </div>
+      <main class="flex-1 overflow-y-auto p-4 md:p-6">
+        {/* Tab bar */}
+        <div class="flex gap-2 mb-4">
+          <TabBtn active={tab === "dashboard"} onClick={() => setTab("dashboard")}>
+            仪表盘
+          </TabBtn>
+          <TabBtn active={tab === "graph"} onClick={() => setTab("graph")}>
+            知识图谱
+          </TabBtn>
+          {selectedSession && (
+            <TabBtn active={tab === "session"} onClick={() => setTab("session")}>
+              会话详情
+            </TabBtn>
           )}
         </div>
 
-        {/* Tabs */}
-        {selectedId && (
-          <div class="flex border-b border-border gap-0">
-            <TabBtn active={tab === 'timeline'} onClick={() => setTab('timeline')}>
-              时间线
-            </TabBtn>
-            <TabBtn active={tab === 'graph'} onClick={() => setTab('graph')}>
-              关系图
-            </TabBtn>
+        {/* Error banner */}
+        {error && (
+          <div class="mb-3 px-3 py-2 rounded bg-red-900/30 border border-red-800/60 text-sm text-red-300">
+            数据加载失败: {error}
           </div>
         )}
 
-        {/* Views */}
-        <div class="flex-1 overflow-hidden">
-          {!selectedId && (
-            <DashboardView stats={stats} sessions={sessions} />
-          )}
-          {selectedId && tab === 'timeline' && (
-            <TimelineView session={detail} loading={detailLoading} />
-          )}
-          {tab === 'graph' && (
-            <GraphView data={graph} loading={graphLoading} />
-          )}
-        </div>
-      </main>
-    </div>
-  );
-}
+        {/* Loading indicator */}
+        {loading && sessions.length === 0 && (
+          <div class="text-center text-text-3 py-12">加载中...</div>
+        )}
 
-function TopStat({ value, label }: { value: number; label: string }) {
-  return (
-    <div class="flex flex-col items-end">
-      <span class="text-base font-bold tabular-nums">{value.toLocaleString()}</span>
-      <span class="text-[9px] text-text-4 uppercase tracking-wider">{label}</span>
+        {/* Tab content */}
+        {tab === "dashboard" && <DashboardView sessions={sessions} />}
+        {tab === "session" && selectedSession && (
+          <TimelineView sessionId={selectedSession} />
+        )}
+        {tab === "graph" && <GraphView sessions={sessions} />}
+      </main>
     </div>
   );
 }
@@ -160,11 +181,7 @@ function TabBtn({
   return (
     <button
       onClick={onClick}
-      class={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-        active
-          ? 'text-text border-primary'
-          : 'text-text-4 border-transparent hover:text-text'
-      }`}
+      class={`px-4 py-1.5 rounded text-sm font-medium transition-colors ${active ? "bg-primary text-white" : "bg-bg-card text-text-3 hover:text-text-2 hover:bg-bg-elev"}`}
     >
       {children}
     </button>

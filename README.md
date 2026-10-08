@@ -23,7 +23,7 @@
 
 ## English
 
-**Lens** is a local-first, transparent HTTP proxy that records the complete communication between AI coding agents (OpenCode, Codex, Claude Code, Trae, Kimi Code) and LLM APIs — then turns those dialogues into interactive visualizations.
+**Lens** is a local-first, transparent HTTP proxy that records the complete communication between AI coding agents (OpenCode, Codex, Claude Code) and LLM APIs — then turns those dialogues into interactive visualizations.
 
 It uses **your agent's own API keys**. Lens just passively watches, records, and visualizes. No configuration changes needed in your agent.
 
@@ -48,7 +48,7 @@ It uses **your agent's own API keys**. Lens just passively watches, records, and
 ### Features
 
 - **Zero-config agent integration** — Set one environment variable, agent works unchanged
-- **Multi-agent recognition** — Auto-detects OpenCode, Codex, Claude Code, Trae, Kimi Code
+- **Multi-agent recognition** — Auto-detects OpenCode, Codex, Claude Code (heuristic detection for others)
 - **HTTPS interception** — Full TLS MITM with dynamic certificate signing
 - **Conversation Timeline** — Full message history with expandable tool calls
 - **Stats Dashboard** — Token usage, agent distribution, model comparison
@@ -107,11 +107,11 @@ lens/
 │   ├── proxy/          # HTTP/HTTPS transparent proxy
 │   │   ├── server.rs   # Entry & dispatch
 │   │   ├── connect.rs  # HTTPS CONNECT + MITM
-│   │   ├── http.rs     # HTTP proxy handler
+│   │   ├── http_handler.rs # HTTP proxy handler
 │   │   ├── io.rs       # I/O helpers
 │   │   ├── cert.rs     # TLS cert management
 │   │   ├── parser.rs   # LLM request/response parser
-│   │   └── request.rs  # Agent detection
+│   │   └── request.rs  # Agent detection + adapter context extraction
 │   ├── engine/
 │   │   ├── store.rs    # SQLite storage
 │   │   ├── graph.rs    # Knowledge graph builder
@@ -134,7 +134,7 @@ MIT
 
 ## 中文
 
-**Lens（透镜）** 是一个本地优先的透明 HTTP 代理，完整录制 AI 编程代理（OpenCode、Codex、Claude Code、Trae、Kimi Code）与 LLM API 之间的通信，并将其转化为交互式可视化。
+**Lens（透镜）** 是一个本地优先的透明 HTTP 代理，完整录制 AI 编程代理（OpenCode、Codex、Claude Code）与 LLM API 之间的通信，并将其转化为交互式可视化。
 
 它使用 **你自己的 API 密钥**。Lens 只是被动地观察、记录和可视化，无需修改你的 agent 配置。
 
@@ -145,7 +145,7 @@ Lens 作为本地代理运行在 `127.0.0.1:9999`，拦截 HTTP/HTTPS 流量（�
 ### 特性
 
 - **零配置集成** — 设置一个环境变量，agent 无需改动
-- **多代理识别** — 自动识别 OpenCode、Codex、Claude Code、Trae、Kimi Code
+- **多代理识别** — 自动识别 OpenCode、Codex、Claude Code（其他代理通过启发式检测）
 - **HTTPS 拦截** — 完整的 TLS MITM + 动态证书签发
 - **对话时间线** — 完整消息历史，可折叠的工具调用
 - **统计面板** — Token 用量、代理分布、模型对比
@@ -198,11 +198,11 @@ lens/
 │   ├── proxy/          # HTTP/HTTPS 透明代理
 │   │   ├── server.rs   # 入口 & 分发
 │   │   ├── connect.rs  # HTTPS CONNECT + MITM
-│   │   ├── http.rs     # HTTP 代理处理
+│   │   ├── http_handler.rs # HTTP 代理处理
 │   │   ├── io.rs       # I/O 辅助
 │   │   ├── cert.rs     # TLS 证书管理
 │   │   ├── parser.rs   # LLM 请求/响应解析
-│   │   └── request.rs  # Agent 检测
+│   │   └── request.rs  # Agent 检测 + 适配器上下文提取
 │   ├── engine/
 │   │   ├── store.rs    # SQLite 存储
 │   │   ├── graph.rs    # 知识图谱构建
