@@ -33,9 +33,13 @@ pub fn extract_context(body: &Value, headers: &std::collections::HashMap<String,
             .collect()
     });
 
-    let betas = headers
-        .get("x-anthropic-beta")
-        .map(|b| b.split(',').map(|s| s.trim().to_string()).collect());
+    let betas = body["betas"].as_array().map(|arr| {
+        arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+    }).or_else(|| {
+        headers
+            .get("x-anthropic-beta")
+            .map(|b| b.split(',').map(|s| s.trim().to_string()).collect())
+    });
 
     ClaudeContext {
         system_blocks: system,

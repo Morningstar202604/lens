@@ -285,7 +285,9 @@ impl Store {
         }))
     }
 
-    fn extract_session_id(request: &LlmRequest) -> String {
+    /// Extract a stable session ID from the request's cwd metadata.
+    /// Public for testing purposes.
+    pub fn extract_session_id(request: &LlmRequest) -> String {
         if let Some(cwd) = request.metadata.get("cwd") {
             // 对 cwd 取 SHA-256 前缀，防止不同路径碰撞（如 /a/b-c vs /a/b/c）
             let hash = {
@@ -300,7 +302,9 @@ impl Store {
         format!("session-{}", &request.id[..8.min(request.id.len())])
     }
 
-    fn detect_agent_type(request: &LlmRequest) -> String {
+    /// Detect agent type from the request's user-agent metadata.
+    /// Public for testing purposes.
+    pub fn detect_agent_type(request: &LlmRequest) -> String {
         if let Some(ua) = request.metadata.get("user-agent") {
             let ua_lower = ua.to_lowercase();
             if ua_lower.contains("opencode") || ua_lower.contains("open-code") {
