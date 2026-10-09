@@ -53,7 +53,7 @@ export function MessageCard({ message }: Props) {
           <span class="ml-auto text-xs text-text-4 tabular-nums">{message.timestamp}</span>
         </div>
         <div class="px-3.5 py-3">
-          <Markdown content={message.content} />
+          <Markdown source={message.content} />
         </div>
       </div>
     </div>

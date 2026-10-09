@@ -1,13 +1,21 @@
 import type { SessionDetail, Message, ToolCall } from '../types';
 import { MessageCard } from './MessageCard';
 import { ToolCallCard } from './ToolCallCard';
+import { api } from '../lib/api';
+import { useState, useEffect } from 'preact/hooks';
 
 interface Props {
-  session: SessionDetail | null;
-  loading: boolean;
+  sessionId: string;
 }
 
-export function TimelineView({ session, loading }: Props) {
+export function TimelineView({ sessionId }: Props) {
+  const [session, setSession] = useState<SessionDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    api.getSession(sessionId).then(d => { setSession(d); setLoading(false); }).catch(() => setLoading(false));
+  }, [sessionId]);
   if (loading) {
     return (
       <div class="flex items-center justify-center h-full text-text-4">

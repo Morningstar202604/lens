@@ -24,6 +24,8 @@ export const api = {
 
   getGraph: (id: string) => getJSON<GraphData>(`/sessions/${id}/graph`),
 
+  getGlobalGraph: () => getJSON<GraphData>('/graph'),
+
   getSummary: (id: string) =>
     getJSON<{ summary: string }>(`/sessions/${id}/summary`).then((r) => r.summary),
 };
