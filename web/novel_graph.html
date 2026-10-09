@@ -3,657 +3,598 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>无职转生 · 知识图谱 | Lens Demo</title>
+<title>无职转生 · 魔法图谱 — Arcane Codex</title>
 <script src="https://d3js.org/d3.v7.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Cormorant+Garamond:wght@300;500;700&family=ZCOOL+XiaoWei&display=swap" rel="stylesheet">
 <style>
-*, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
-@font-face { font-family:'CN'; src:local('Noto Sans SC'),local('PingFang SC'),local('Microsoft YaHei'); }
-:root {
-  --bg:#0a0e17; --bg2:#111827; --fg:#e2e8f0; --dim:#64748b;
-  --char:#60a5fa; --loc:#34d399; --family:#a78bfa; --event:#f87171;
-  --skill:#fb923c; --artifact:#fbbf24; --theme:#f472b6;
-  --glow:rgba(96,165,250,.25);
+/* ═══════════════════════════════════════════
+   ARCANE CODEX  ·  Aesthetic Foundation
+   ═══════════════════════════════════════════ */
+:root{
+  --void:#080a14; --abyss:#0d1025; --ink:#151935; --rune:#1c2244;
+  --gold:#c9a961; --gold-bright:#f0d48a; --gold-dim:#8a7240;
+  --arcane:#7c3aed; --arcane-dim:#4a1e99;
+  --mana:#4fc3f7; --mana-dim:#1a6d91;
+  --blood:#dc2626; --blood-dim:#7f1d1d;
+  --life:#22c55e; --life-dim:#15803d;
+  --ember:#f97316; --ember-dim:#9a3412;
+  --soul:#ec4899; --soul-dim:#9d174d;
+  --frost:#67e8f9; --frost-dim:#0e7490;
+  --paper:#f5e6c8; --ink-text:#e8dcc8;
 }
-html,body { width:100%; height:100%; overflow:hidden; background:var(--bg); color:var(--fg); font-family:'CN',system-ui,sans-serif; }
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;font-family:'Cormorant Garamond','ZCOOL XiaoWei',serif;color:var(--ink-text);background:var(--void)}
+::selection{background:var(--gold);color:var(--void)}
 
-/* ── Layout ── */
-#app { position:relative; width:100%; height:100%; }
-#canvas { position:absolute; inset:0; }
-#ui { position:absolute; inset:0; pointer-events:none; }
-#ui > * { pointer-events:auto; }
+/* ── Background layers ── */
+#bg-void{position:fixed;inset:0;background:
+  radial-gradient(ellipse 120% 100% at 50% 50%,rgba(124,58,237,.06) 0%,transparent 60%),
+  radial-gradient(ellipse 80% 80% at 30% 20%,rgba(79,195,247,.04) 0%,transparent 50%),
+  radial-gradient(ellipse 100% 80% at 70% 80%,rgba(201,169,97,.03) 0%,transparent 50%),
+  var(--void);
+}
+#bg-grain{position:fixed;inset:0;opacity:.03;pointer-events:none;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+#bg-symbols{position:fixed;inset:0;opacity:.015;pointer-events:none;}
 
-/* ── Header ── */
-#header {
-  position:absolute; top:0; left:0; right:0; display:flex; align-items:center; gap:16px;
-  padding:14px 24px; background:linear-gradient(180deg,rgba(10,14,23,.95) 60%,transparent);
-  z-index:10;
+/* ── Top Bar ── */
+#topbar{
+  position:fixed;top:0;left:0;right:0;height:64px;z-index:20;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 32px;
+  background:linear-gradient(180deg,rgba(8,10,20,.92) 0%,rgba(8,10,20,.4) 80%,transparent 100%);
+  backdrop-filter:blur(8px);
 }
-#header h1 { font-size:18px; font-weight:700; letter-spacing:.5px; white-space:nowrap; }
-#header h1 span { color:var(--char); }
-#header .sub { font-size:12px; color:var(--dim); }
-#stats-bar { margin-left:auto; display:flex; gap:18px; font-size:12px; color:var(--dim); }
-#stats-bar b { color:var(--fg); font-weight:600; }
+#topbar .brand{display:flex;align-items:center;gap:14px}
+#topbar .sigil{
+  width:38px;height:38px;border:1.5px solid var(--gold-dim);border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  background:radial-gradient(circle,rgba(201,169,97,.15),transparent);
+  box-shadow:0 0 20px rgba(201,169,97,.2),inset 0 0 10px rgba(201,169,97,.1);
+  animation:sigil-pulse 4s ease-in-out infinite;
+}
+@keyframes sigil-pulse{0%,100%{box-shadow:0 0 15px rgba(201,169,97,.15)}50%{box-shadow:0 0 25px rgba(201,169,97,.35),inset 0 0 15px rgba(201,169,97,.15)}}
+#topbar h1{font-family:'Cinzel',serif;font-weight:700;font-size:18px;color:var(--gold-bright);letter-spacing:2px;text-shadow:0 0 30px rgba(201,169,97,.3)}
+#topbar .latin{font-family:'Cinzel',serif;font-size:10px;color:var(--gold-dim);letter-spacing:3px;text-transform:uppercase}
+#topbar .stats{display:flex;align-items:center;gap:24px;font-size:12px;color:var(--gold-dim)}
+#topbar .stats span b{color:var(--gold-bright);font-size:16px;font-family:'Cinzel',serif;margin-right:4px}
 
-/* ── Search ── */
-#search-wrap {
-  position:absolute; top:62px; left:24px; width:260px; z-index:9;
+/* ── Search (prominent) ── */
+#search-area{
+  position:fixed;top:72px;left:50%;transform:translateX(-50%);z-index:15;
+  width:440px;max-width:60vw;
 }
-#search {
-  width:100%; padding:8px 14px 8px 36px; border-radius:10px;
-  border:1px solid rgba(255,255,255,.08); background:rgba(17,24,39,.8);
-  backdrop-filter:blur(12px); color:var(--fg); font-size:13px; outline:none;
-  transition:border .2s;
+#search{
+  width:100%;padding:10px 16px 10px 44px;border-radius:30px;
+  border:1px solid rgba(201,169,97,.2);background:rgba(13,16,37,.8);
+  backdrop-filter:blur(16px);color:var(--paper);font-size:15px;outline:none;
+  font-family:'Cormorant Garamond',serif;letter-spacing:.5px;
+  transition:all .3s cubic-bezier(.4,0,.2,1);
 }
-#search:focus { border-color:var(--char); box-shadow:0 0 0 3px rgba(96,165,250,.15); }
-#search-icon { position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--dim); font-size:14px; }
+#search::placeholder{color:var(--gold-dim);opacity:.6;font-style:italic}
+#search:focus{border-color:var(--gold);box-shadow:0 0 0 3px rgba(201,169,97,.1),0 0 40px rgba(201,169,97,.08)}
+#search-icon{position:absolute;left:18px;top:50%;transform:translateY(-50%);color:var(--gold);opacity:.7;font-size:14px}
 
-/* ── Filter chips ── */
-#filters {
-  position:absolute; top:62px; right:24px; display:flex; flex-wrap:wrap; gap:6px;
-  max-width:calc(100% - 600px); justify-content:flex-end; z-index:9;
+/* ── Filter Bar (icon-only, bottom-right corner orb) ── */
+#filters{
+  position:fixed;bottom:28px;right:28px;display:flex;flex-direction:column;gap:8px;z-index:15;
 }
-.chip {
-  padding:5px 12px; border-radius:20px; font-size:11px; cursor:pointer;
-  border:1px solid rgba(255,255,255,.1); background:rgba(17,24,39,.7);
-  backdrop-filter:blur(8px); transition:all .2s; user-select:none;
+.filter-btn{
+  width:40px;height:40px;border-radius:50%;cursor:pointer;
+  border:1px solid rgba(201,169,97,.15);background:rgba(13,16,37,.85);
+  backdrop-filter:blur(12px);display:flex;align-items:center;justify-content:center;
+  font-size:18px;transition:all .3s;position:relative;
 }
-.chip.active { border-color:currentColor; box-shadow:0 0 12px rgba(255,255,255,.08); }
-.chip:hover { transform:translateY(-1px); }
-.chip.character { color:var(--char); } .chip.character.active { background:rgba(96,165,250,.15); }
-.chip.location  { color:var(--loc);  } .chip.location.active  { background:rgba(52,211,153,.15); }
-.chip.family    { color:var(--family);} .chip.family.active   { background:rgba(167,139,250,.15); }
-.chip.event     { color:var(--event);} .chip.event.active    { background:rgba(248,113,113,.15); }
-.chip.skill     { color:var(--skill);} .chip.skill.active    { background:rgba(251,146,60,.15); }
-.chip.artifact  { color:var(--artifact);} .chip.artifact.active { background:rgba(251,191,36,.15); }
-.chip.theme     { color:var(--theme);} .chip.theme.active    { background:rgba(244,114,182,.15); }
+.filter-btn:hover{transform:scale(1.1);border-color:currentColor}
+.filter-btn.active{box-shadow:0 0 15px rgba(255,255,255,.1)}
+.filter-btn[data-k="character"]{color:var(--gold)}
+.filter-btn[data-k="location"]{color:var(--life)}
+.filter-btn[data-k="family"]{color:var(--arcane)}
+.filter-btn[data-k="event"]{color:var(--blood)}
+.filter-btn[data-k="skill"]{color:var(--ember)}
+.filter-btn[data-k="artifact"]{color:var(--frost)}
+.filter-btn[data-k="theme"]{color:var(--soul)}
+.filter-btn::after{
+  content:attr(data-name);position:absolute;right:50px;top:50%;transform:translateY(-50%);
+  background:rgba(13,16,37,.95);border:1px solid rgba(201,169,97,.2);border-radius:8px;
+  padding:4px 10px;font-size:11px;color:var(--paper);white-space:nowrap;opacity:0;
+  pointer-events:none;transition:opacity .2s,right .2s;font-family:'Cinzel',serif;letter-spacing:1px;
+}
+.filter-btn:hover::after{opacity:1;right:56px}
 
-/* ── Legend (bottom-left) ── */
-#legend {
-  position:absolute; bottom:20px; left:24px; background:rgba(17,24,39,.85);
-  backdrop-filter:blur(12px); border:1px solid rgba(255,255,255,.06); border-radius:12px;
-  padding:12px 16px; z-index:9; min-width:140px;
+/* ── Controls ── */
+#controls{position:fixed;bottom:28px;left:28px;display:flex;flex-direction:column;gap:6px;z-index:15}
+.ctrl{
+  width:36px;height:36px;border-radius:50%;cursor:pointer;
+  border:1px solid rgba(201,169,97,.12);background:rgba(13,16,37,.7);
+  backdrop-filter:blur(10px);color:var(--gold-dim);font-size:16px;
+  display:flex;align-items:center;justify-content:center;transition:all .2s;
 }
-#legend h4 { font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; }
-#legend .row { display:flex; align-items:center; gap:8px; padding:3px 0; font-size:12px; }
-#legend .dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.ctrl:hover{color:var(--gold);background:rgba(201,169,97,.08)}
 
-/* ── Detail panel (right slide) ── */
-#detail {
-  position:absolute; top:0; right:-380px; width:360px; height:100%;
-  background:rgba(17,24,39,.95); backdrop-filter:blur(20px);
-  border-left:1px solid rgba(255,255,255,.06); padding:72px 24px 24px;
-  transition:right .35s cubic-bezier(.4,0,.2,1); z-index:11;
+/* ── Right Side Panel ── */
+#panel{
+  position:fixed;top:0;right:-420px;width:400px;height:100%;z-index:25;
+  background:linear-gradient(180deg,rgba(13,16,37,.97) 0%,rgba(8,10,20,.98) 100%);
+  backdrop-filter:blur(30px);
+  border-left:1px solid rgba(201,169,97,.12);
+  padding:28px 28px 28px;transition:right .45s cubic-bezier(.4,0,.2,1);
   overflow-y:auto;
 }
-#detail.open { right:0; }
-#detail .close { position:absolute; top:20px; right:20px; background:none; border:none; color:var(--dim); font-size:22px; cursor:pointer; }
-#detail .kind-tag {
-  display:inline-block; padding:3px 10px; border-radius:12px; font-size:11px; margin-bottom:12px;
-}
-#detail h2 { font-size:20px; font-weight:700; margin-bottom:4px; }
-#detail .alias { font-size:13px; color:var(--dim); margin-bottom:16px; }
-#detail .weight-bar { height:4px; border-radius:2px; background:rgba(255,255,255,.06); margin-bottom:20px; overflow:hidden; }
-#detail .weight-fill { height:100%; border-radius:2px; transition:width .5s; }
-#detail h5 { font-size:11px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin:16px 0 8px; }
-#detail .rel-item {
-  display:flex; align-items:center; gap:10px; padding:7px 10px; border-radius:8px;
-  margin-bottom:4px; cursor:pointer; transition:background .15s; font-size:13px;
-}
-#detail .rel-item:hover { background:rgba(255,255,255,.05); }
-#detail .rel-arrow { color:var(--dim); font-size:11px; }
-#detail .mini-dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
-
-/* ── Controls (bottom-right) ── */
-#controls {
-  position:absolute; bottom:20px; right:24px; display:flex; flex-direction:column; gap:6px; z-index:9;
-}
-.ctrl-btn {
-  width:36px; height:36px; border-radius:10px; border:1px solid rgba(255,255,255,.08);
-  background:rgba(17,24,39,.85); backdrop-filter:blur(8px); color:var(--fg);
-  font-size:16px; cursor:pointer; display:flex; align-items:center; justify-content:center;
+#panel.open{right:0}
+#panel .close-btn{
+  position:absolute;top:18px;right:18px;width:32px;height:32px;border-radius:50%;
+  border:1px solid rgba(201,169,97,.15);background:rgba(201,169,97,.05);
+  color:var(--gold);cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;
   transition:all .2s;
 }
-.ctrl-btn:hover { border-color:var(--char); transform:translateY(-1px); }
+#panel .close-btn:hover{background:rgba(201,169,97,.15);transform:rotate(90deg)}
+#panel .ornament{display:flex;align-items:center;gap:12px;margin-bottom:18px;opacity:.3}
+#panel .ornament::before,#panel .ornament::after{content:'';flex:1;height:1px;background:var(--gold-dim)}
 
-/* ── D3 elements ── */
-svg { width:100%; height:100%; }
-.node-circle {
-  cursor:pointer; stroke:rgba(255,255,255,.15); stroke-width:1.5;
-  transition:stroke-width .15s, stroke .15s;
+#panel .kind-orb{
+  width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-size:24px;margin:0 auto 16px;box-shadow:0 0 30px currentColor,inset 0 0 15px rgba(0,0,0,.4);
+  border:2px solid rgba(255,255,255,.1);position:relative;
 }
-.node-circle:hover { stroke-width:3; stroke:rgba(255,255,255,.6); }
-.node-label {
-  font-size:11px; fill:var(--fg); pointer-events:none; text-anchor:middle;
-  text-shadow:0 1px 4px rgba(0,0,0,.9); font-weight:500;
+#panel .kind-orb::after{
+  content:'';position:absolute;inset:-6px;border-radius:50%;border:1px solid currentColor;opacity:.2;
+  animation:sigil-pulse 3s ease-in-out infinite;
 }
-.edge { stroke:rgba(255,255,255,.12); stroke-width:1; fill:none; }
-.edge.dim { stroke:rgba(255,255,255,.03); }
-.edge.highlight { stroke-width:2.5; }
-.edge-label { font-size:9px; fill:var(--dim); pointer-events:none; text-anchor:middle; opacity:0; transition:opacity .2s; }
-.edge-label.show { opacity:.7; }
-.node-group.dim .node-circle { opacity:.12; }
-.node-group.dim .node-label { opacity:.15; }
-.node-group.highlight .node-circle { stroke-width:3; stroke:rgba(255,255,255,.6); }
+#panel h2{font-family:'Cinzel',serif;font-size:24px;font-weight:700;color:var(--gold-bright);text-align:center;margin-bottom:4px;text-shadow:0 0 20px rgba(201,169,97,.3)}
+#panel .latin-name{font-size:12px;color:var(--gold-dim);text-align:center;letter-spacing:2px;text-transform:uppercase;margin-bottom:20px}
+#panel .weight-ring{
+  width:80px;height:80px;margin:0 auto 24px;position:relative;
+}
+#panel .weight-ring svg{transform:rotate(-90deg)}
+#panel .weight-ring .val{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:'Cinzel',serif;font-size:18px;color:var(--gold-bright)}
 
-/* ── Glow filter defs overlay ── */
-.glow-blue { filter:url(#glow-blue); } .glow-green { filter:url(#glow-green); }
-.glow-purple { filter:url(#glow-purple); } .glow-red { filter:url(#glow-red); }
-.glow-orange { filter:url(#glow-orange); } .glow-yellow { filter:url(#glow-yellow); }
-.glow-pink { filter:url(#glow-pink); }
-
-/* ── Loading ── */
-#loading { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:var(--bg); z-index:20; transition:opacity .5s; }
-#loading.hide { opacity:0; pointer-events:none; }
-.spinner {
-  width:40px; height:40px; border:3px solid rgba(96,165,250,.2); border-top-color:var(--char);
-  border-radius:50%; animation:spin 1s linear infinite;
+/* Relationships in panel */
+#panel .section-title{font-family:'Cinzel',serif;font-size:11px;color:var(--gold-dim);letter-spacing:2px;text-transform:uppercase;margin:20px 0 10px;padding-bottom:6px;border-bottom:1px solid rgba(201,169,97,.1)}
+#panel .rel-group{margin-bottom:14px}
+#panel .rel-group-title{font-size:11px;color:var(--gold-dim);margin-bottom:6px;letter-spacing:1px}
+#panel .rel-item{
+  display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;
+  margin-bottom:4px;cursor:pointer;transition:all .15s;
+  border:1px solid transparent;
 }
-@keyframes spin { to { transform:rotate(360deg); } }
+#panel .rel-item:hover{background:rgba(201,169,97,.06);border-color:rgba(201,169,97,.1)}
+#panel .rel-item .mini-orb{
+  width:28px;height:28px;border-radius:50%;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;font-size:12px;
+  background:radial-gradient(circle,rgba(255,255,255,.1),transparent);
+}
+#panel .rel-item .rel-text{flex:1;font-size:13px;color:var(--ink-text)}
+#panel .rel-item .rel-type{font-size:10px;color:var(--gold-dim);font-style:italic}
 
 /* ── Tooltip ── */
-#tooltip {
-  position:absolute; padding:6px 10px; border-radius:8px; font-size:12px; pointer-events:none;
-  background:rgba(17,24,39,.95); border:1px solid rgba(255,255,255,.1); opacity:0;
-  transition:opacity .15s; z-index:15; white-space:nowrap;
+#tooltip{
+  position:fixed;padding:8px 14px;border-radius:10px;font-size:13px;pointer-events:none;
+  background:rgba(8,10,20,.96);border:1px solid rgba(201,169,97,.2);
+  backdrop-filter:blur(12px);opacity:0;transition:opacity .2s;z-index:30;
+  box-shadow:0 4px 20px rgba(0,0,0,.4);font-family:'Cormorant Garamond',serif;
 }
+#tooltip .ttl{color:var(--gold-bright);font-weight:600}
+#tooltip .cat{color:var(--gold-dim);font-size:10px;letter-spacing:1px}
 
-/* Scrollbar */
-::-webkit-scrollbar { width:4px; }
-::-webkit-scrollbar-track { background:transparent; }
-::-webkit-scrollbar-thumb { background:rgba(255,255,255,.1); border-radius:2px; }
+/* ── Loading ── */
+#loading{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--void);z-index:50;transition:opacity .6s}
+#loading.hide{opacity:0;pointer-events:none}
+#loading .orb{
+  width:60px;height:60px;border:2px solid var(--gold-dim);border-top-color:var(--gold);border-radius:50%;
+  animation:spin 1.2s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+#loading p{margin-top:20px;font-family:'Cinzel',serif;color:var(--gold);letter-spacing:3px;font-size:13px;}
+
+/* ── SVG ── */
+svg{position:fixed;inset:0;width:100%;height:100%}
+
+/* Scrollbar (panel only) */
+#panel::-webkit-scrollbar{width:3px}
+#panel::-webkit-scrollbar-track{background:transparent}
+#panel::-webkit-scrollbar-thumb{background:rgba(201,169,97,.2);border-radius:3px}
 </style>
 </head>
 <body>
 
-<div id="app">
-  <canvas id="canvas"></canvas>
-  <svg id="svg" width="100%" height="100%"></svg>
+<div id="bg-void"></div>
+<div id="bg-grain"></div>
+<div id="bg-symbols"></div>
 
-  <div id="ui">
-    <!-- Header -->
-    <div id="header">
-      <h1>无职转生 <span>·</span> 知识图谱</h1>
-      <span class="sub">Mushoku Tensei Knowledge Graph</span>
-      <div id="stats-bar">
-        <span><b id="stat-nodes">0</b> 节点</span>
-        <span><b id="stat-edges">0</b> 边</span>
-        <span><b id="stat-types">0</b> 类目</span>
-      </div>
-    </div>
+<svg><defs>
+  <filter id="glow-gold"><feGaussianBlur stdDeviation="6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <filter id="glow-life"><feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <filter id="glow-arcane"><feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <filter id="glow-blood"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <filter id="glow-ember"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <filter id="glow-frost"><feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <filter id="glow-soul"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <filter id="glow-soft"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <radialGradient id="node-grad-gold" cx="40%" cy="35%"><stop offset="0%" stop-color="#f7e6b8"/><stop offset="100%" stop-color="#c9a961"/></radialGradient>
+  <radialGradient id="node-grad-life" cx="40%" cy="35%"><stop offset="0%" stop-color="#86efac"/><stop offset="100%" stop-color="#16a34a"/></radialGradient>
+  <radialGradient id="node-grad-arcane" cx="40%" cy="35%"><stop offset="0%" stop-color="#c4b5fd"/><stop offset="100%" stop-color="#6d28d9"/></radialGradient>
+  <radialGradient id="node-grad-blood" cx="40%" cy="35%"><stop offset="0%" stop-color="#fca5a5"/><stop offset="100%" stop-color="#dc2626"/></radialGradient>
+  <radialGradient id="node-grad-ember" cx="40%" cy="35%"><stop offset="0%" stop-color="#fed7aa"/><stop offset="100%" stop-color="#ea580c"/></radialGradient>
+  <radialGradient id="node-grad-frost" cx="40%" cy="35%"><stop offset="0%" stop-color="#a5f3fc"/><stop offset="100%" stop-color="#0891b2"/></radialGradient>
+  <radialGradient id="node-grad-soul" cx="40%" cy="35%"><stop offset="0%" stop-color="#fbcfe8"/><stop offset="100%" stop-color="#db2777"/></radialGradient>
+  <pattern id="arcane-circle" x="0" y="0" width="200" height="200" patternUnits="userSpaceOnUse">
+    <circle cx="100" cy="100" r="98" fill="none" stroke="#c9a961" stroke-width=".3" opacity=".15"/>
+    <circle cx="100" cy="100" r="80" fill="none" stroke="#c9a961" stroke-width=".2" opacity=".1"/>
+    <line x1="0" y1="100" x2="200" y2="100" stroke="#c9a961" stroke-width=".15" opacity=".08"/>
+    <line x1="100" y1="0" x2="100" y2="200" stroke="#c9a961" stroke-width=".15" opacity=".08"/>
+  </pattern>
+</defs>
+<rect width="100%" height="100%" fill="url(#arcane-circle)"/>
+</svg>
 
-    <!-- Search -->
-    <div id="search-wrap">
-      <span id="search-icon">🔍</span>
-      <input id="search" type="text" placeholder="搜索角色、地点、事件..." autocomplete="off">
-    </div>
-
-    <!-- Filters -->
-    <div id="filters">
-      <div class="chip character active" data-kind="character">角色</div>
-      <div class="chip location active" data-kind="location">地点</div>
-      <div class="chip family active" data-kind="family">家族</div>
-      <div class="chip event active" data-kind="event">事件</div>
-      <div class="chip skill active" data-kind="skill">技能</div>
-      <div class="chip artifact active" data-kind="artifact">神器</div>
-      <div class="chip theme active" data-kind="theme">主题</div>
-    </div>
-
-    <!-- Detail -->
-    <div id="detail">
-      <button class="close" onclick="closeDetail()">✕</button>
-      <div id="detail-content"></div>
-    </div>
-
-    <!-- Legend -->
-    <div id="legend">
-      <h4>图例</h4>
-      <div class="row"><span class="dot" style="background:var(--char)"></span> 角色</div>
-      <div class="row"><span class="dot" style="background:var(--loc)"></span> 地点</div>
-      <div class="row"><span class="dot" style="background:var(--family)"></span> 家族</div>
-      <div class="row"><span class="dot" style="background:var(--event)"></span> 事件</div>
-      <div class="row"><span class="dot" style="background:var(--skill)"></span> 技能/魔法</div>
-      <div class="row"><span class="dot" style="background:var(--artifact)"></span> 神器</div>
-      <div class="row"><span class="dot" style="background:var(--theme)"></span> 主题</div>
-    </div>
-
-    <!-- Controls -->
-    <div id="controls">
-      <button class="ctrl-btn" onclick="zoomIn()" title="放大">+</button>
-      <button class="ctrl-btn" onclick="zoomOut()" title="缩小">−</button>
-      <button class="ctrl-btn" onclick="resetView()" title="重置">⟲</button>
-      <button class="ctrl-btn" onclick="togglePhysics()" title="物理模拟">⚡</button>
+<!-- UI -->
+<div id="topbar">
+  <div class="brand">
+    <div class="sigil">⚜</div>
+    <div>
+      <h1>无职转生</h1>
+      <div class="latin">Mushoku Tensei · Codex Arcanum</div>
     </div>
   </div>
-
-  <div id="tooltip"></div>
-  <div id="loading"><div class="spinner"></div></div>
+  <div class="stats">
+    <span><b id="s-nodes">0</b>ENTITAS</span>
+    <span><b id="s-edges">0</b>NEXUS</span>
+    <span><b id="s-types">0</b>ORDO</span>
+  </div>
 </div>
 
+<div id="search-area">
+  <span id="search-icon">⌖</span>
+  <input id="search" placeholder="Search entities... (角色·地点·家族)" autocomplete="off">
+</div>
+
+<div id="controls">
+  <div class="ctrl" onclick="zoomIn()" title="Magnify">⊕</div>
+  <div class="ctrl" onclick="zoomOut()" title="Minimize">⊖</div>
+  <div class="ctrl" onclick="resetView()" title="Reset Orrery">⊙</div>
+  <div class="ctrl" onclick="togglePhysics()" title="Toggle Ether">✦</div>
+</div>
+
+<div id="filters">
+  <div class="filter-btn active" data-k="character" data-name="CHARACTER" title="Character">◈</div>
+  <div class="filter-btn active" data-k="location" data-name="LOCATION" title="Location">◉</div>
+  <div class="filter-btn active" data-k="family" data-name="HOUSE" title="House">◆</div>
+  <div class="filter-btn active" data-k="event" data-name="EVENT" title="Event">✧</div>
+  <div class="filter-btn active" data-k="skill" data-name="ARTE" title="Skill">⟐</div>
+  <div class="filter-btn active" data-k="artifact" data-name="ARTIFACT" title="Artifact">◇</div>
+  <div class="filter-btn active" data-k="theme" data-name="THEMA" title="Theme">❖</div>
+</div>
+
+<!-- Detail Panel -->
+<div id="panel">
+  <button class="close-btn" onclick="closePanel()">✕</button>
+  <div id="panel-c"></div>
+</div>
+
+<!-- Tooltip -->
+<div id="tooltip"></div>
+
+<!-- Loading -->
+<div id="loading"><div class="orb"></div><p>INVOCATING GRAPHIUM...</p></div>
+
 <script>
-// ═══════════════════════════════════════════════
-//  Config
-// ═══════════════════════════════════════════════
-const COLORS = {
-  character:'#60a5fa', location:'#34d399', family:'#a78bfa', event:'#f87171',
-  skill:'#fb923c', artifact:'#fbbf24', theme:'#f472b6', file:'#94a3b8',
-  function:'#94a3b8', topic:'#94a3b8', unknown:'#64748b'
+// ═══════════════════════════════════════
+//  ARCANE CODEX  ·  Engine
+// ═══════════════════════════════════════
+const C = {
+  character:['#c9a961','#f0d48a','url(#node-grad-gold)','glow-gold','◈'],
+  location:['#22c55e','#86efac','url(#node-grad-life)','glow-life','◉'],
+  family:['#7c3aed','#a78bfa','url(#node-grad-arcane)','glow-arcane','◆'],
+  event:['#dc2626','#fca5a5','url(#node-grad-blood)','glow-blood','✧'],
+  skill:['#f97316','#fed7aa','url(#node-grad-ember)','glow-ember','⟐'],
+  artifact:['#06b6d4','#67e8f9','url(#node-grad-frost)','glow-frost','◇'],
+  theme:['#ec4899','#fbcfe8','url(#node-grad-soul)','glow-soul','❖']
 };
-const KIND_ZH = {
-  character:'角色', location:'地点', family:'家族', event:'事件',
-  skill:'技能/魔法', artifact:'神器', theme:'主题', file:'文件',
-  function:'函数', topic:'主题', other:'其他', unknown:'未知'
-};
-const GLOW_FILTERS = {
-  character:'glow-blue', location:'glow-green', family:'glow-purple', event:'glow-red',
-  skill:'glow-orange', artifact:'glow-yellow', theme:'glow-pink'
-};
+const KIND = {character:'Character',location:'Location',house:'House',event:'Arcanum',skill:'Ars',artifact:'Artefactum',theme:'Thema'};
+const svg = d3.select('svg');
+const W = ()=>window.innerWidth, H = ()=>window.innerHeight;
 
-const svg = d3.select('#svg');
-const width = window.innerWidth, height = window.innerHeight;
-let g, sim, zoom;
-let nodes = [], edges = [];
-let activeFilters = new Set(Object.keys(COLORS));
+let g, sim, zoom, link, nodeG, linkLabel;
+let nodes = [], links = [];
+let activeK = new Set(['character','location','family','event','skill','artifact','theme']);
 let physicsOn = true;
-let selectedNode = null;
 
-// ═══════════════════════════════════════════════
-//  Init SVG + defs
-// ═══════════════════════════════════════════════
-function initSvg() {
-  svg.selectAll('*').remove();
-  const defs = svg.append('defs');
+// ── Init SVG groups ──
+function initGraph(){
+  svg.selectAll('.graph').remove();
+  g = svg.append('g').attr('class','graph');
+  const defs = svg.select('defs');
 
-  // Glow filters
-  Object.entries({
-    'glow-blue':   '#60a5fa',
-    'glow-green':  '#34d399',
-    'glow-purple': '#a78bfa',
-    'glow-red':    '#f87171',
-    'glow-orange': '#fb923c',
-    'glow-yellow': '#fbbf24',
-    'glow-pink':   '#f472b6'
-  }).forEach(([id, color]) => {
-    const f = defs.append('filter').attr('id', id).attr('x','-50%').attr('y','-50%').attr('width','200%').attr('height','200%');
-    f.append('feGaussianBlur').attr('stdDeviation','4').attr('result','blur');
-    const m = f.append('feMerge');
-    m.append('feMergeNode').attr('in','blur');
-    m.append('feMergeNode').attr('in','SourceGraphic');
+  // Arrow markers per color
+  Object.entries(C).forEach(([k,[c]])=>{
+    defs.append('marker').attr('id','arrow-'+k).attr('viewBox','0 -5 10 10').attr('refX',22).attr('refY',0)
+      .attr('markerWidth',7).attr('markerHeight',7).attr('orient','auto')
+      .append('path').attr('d','M0,-4L8,0L0,4').attr('fill',c).attr('opacity',.5);
   });
 
-  // Arrow marker
-  defs.append('marker').attr('id','arrow').attr('viewBox','0 -5 10 10').attr('refX',20).attr('refY',0)
-    .attr('markerWidth',6).attr('markerHeight',6).attr('orient','auto')
-    .append('path').attr('d','M0,-4L8,0L0,4').attr('fill','rgba(255,255,255,.2)');
-
-  g = svg.append('g').attr('class','graph-root');
-
-  zoom = d3.zoom().scaleExtent([0.2, 5]).on('zoom', (e) => g.attr('transform', e.transform));
+  zoom = d3.zoom().scaleExtent([.15,4]).on('zoom',e=>g.attr('transform',e.transform));
   svg.call(zoom);
-  svg.on('click', (e) => { if (e.target.tagName === 'svg') closeDetail(); });
+  svg.on('click',e=>{if(e.target.tagName==='svg'||e.target.tagName==='rect')closePanel()});
+
+  const linkLayer = g.append('g').attr('class','links');
+  const labelLayer = g.append('g').attr('class','link-labels');
+  const nodeLayer = g.append('g').attr('class','nodes');
+
+  link = linkLayer.selectAll('path');
+  linkLabel = labelLayer.selectAll('text');
+  nodeG = nodeLayer.selectAll('g');
 }
 
-// ═══════════════════════════════════════════════
-//  Build graph
-// ═══════════════════════════════════════════════
-function buildGraph(data) {
-  nodes = data.nodes.map(d => ({...d}));
-  edges = data.edges.map(d => ({...d}));
+// ── Render ──
+function render(){
+  const vn = nodes.filter(n=>activeK.has(n.kind));
+  const vids = new Set(vn.map(n=>n.id));
+  const vl = links.filter(l=>vids.has(l.source.id||l.source)&&vids.has(l.target.id||l.target));
 
-  // Update stats
-  document.getElementById('stat-nodes').textContent = nodes.length;
-  document.getElementById('stat-edges').textContent = edges.length;
-  const types = new Set(nodes.map(n => n.kind));
-  document.getElementById('stat-types').textContent = types.size;
-
-  // Render
-  render();
-}
-
-function render() {
-  g.selectAll('*').remove();
-
-  const visibleNodes = nodes.filter(n => activeFilters.has(n.kind));
-  const visibleIds = new Set(visibleNodes.map(n => n.id));
-  const visibleEdges = edges.filter(e => visibleIds.has(e.source) && visibleIds.has(e.target));
-
-  // Simulation
-  sim = d3.forceSimulation(visibleNodes)
-    .force('link', d3.forceLink(visibleEdges).id(d => d.id).distance(80).strength(.4))
-    .force('charge', d3.forceManyBody().strength(-200))
-    .force('center', d3.forceCenter(width / 2, height / 2).strength(.05))
-    .force('collision', d3.forceCollide().radius(d => nodeRadius(d) + 8))
-    .force('x', d3.forceX(width / 2).strength(.03))
-    .force('y', d3.forceY(height / 2).strength(.03));
+  sim = d3.forceSimulation(vn)
+    .force('link',d3.forceLink(vl).id(d=>d.id).distance(d=>{
+      const w = (d.source.weight||1)+(d.target.weight||1);
+      return 90 + (20-Math.min(w,20))*3;
+    }).strength(.35))
+    .force('charge',d3.forceManyBody().strength(-280))
+    .force('center',d3.forceCenter(W()/2,H()/2).strength(.04))
+    .force('collide',d3.forceCollide().radius(d=>nr(d)+12))
+    .force('x',d3.forceX(W()/2).strength(.02))
+    .force('y',d3.forceY(H()/2).strength(.02));
 
   // Edges
-  const edgeSel = g.append('g').attr('class','edges')
-    .selectAll('path').data(visibleEdges).join('path')
-    .attr('class','edge').attr('marker-end','url(#arrow)')
-    .attr('data-source', d => d.source.id || d.source)
-    .attr('data-target', d => d.target.id || d.target);
+  link = link.data(vl,d=>d.source.id+'-'+d.target.id).join(
+    enter=>enter.append('path').attr('class','edge'),
+    update=>update,
+    exit=>exit.remove()
+  );
+  link.attr('fill','none')
+    .attr('stroke',d=>{
+      const k = d.source.kind||'character';
+      const c = C[k]||C.character;
+      return c[1];
+    })
+    .attr('stroke-opacity',d=>.2+.15*(d.weight||1)/10)
+    .attr('stroke-width',d=>.8+Math.min((d.weight||1)/4,2.5))
+    .attr('stroke-linecap','round')
+    .attr('marker-end',d=>`url(#arrow-${d.source.kind||'character'})`);
 
-  // Edge labels
-  const edgeLabelSel = g.append('g').attr('class','edge-labels')
-    .selectAll('text').data(visibleEdges).join('text')
-    .attr('class','edge-label').text(d => d.relation);
+  // Edge labels (only show on hover)
+  linkLabel = linkLabel.data(vl,d=>d.source.id+'-'+d.target.id).join('text')
+    .attr('class','edge-lbl')
+    .attr('text-anchor','middle')
+    .attr('fill','#c9a961')
+    .attr('font-size','9px')
+    .attr('opacity',0)
+    .attr('pointer-events','none')
+    .text(d=>d.relation);
 
   // Nodes
-  const nodeSel = g.selectAll('.node-group').data(visibleNodes, d => d.id)
-    .join('g').attr('class','node-group')
-    .call(d3.drag()
-      .on('start', dragStart).on('drag', dragMove).on('end', dragEnd));
+  nodeG = nodeG.data(vn,d=>d.id).join(
+    enter=>{
+      const grp = enter.append('g').attr('class','node');
+      // Outer glow ring
+      grp.append('circle').attr('class','n-glow')
+        .attr('r',d=>nr(d)+6)
+        .attr('fill','none')
+        .attr('stroke',d=>C[d.kind]?C[d.kind][1]:'#666')
+        .attr('stroke-width',1)
+        .attr('stroke-opacity',.15)
+        .attr('filter',d=>`url(#${C[d.kind]?C[d.kind][3]:'glow-soft'})`);
+      // Main circle
+      grp.append('circle').attr('class','n-main')
+        .attr('r',d=>nr(d))
+        .attr('fill',d=>C[d.kind]?C[d.kind][2]:'#666')
+        .attr('stroke',d=>C[d.kind]?C[d.kind][0]:'#888')
+        .attr('stroke-width',1.5)
+        .attr('stroke-opacity',.8)
+        .attr('filter',d=>`url(#${C[d.kind]?C[d.kind][3]:'glow-soft'})`)
+        .style('cursor','pointer');
+      // Sigil character
+      grp.append('text').attr('class','n-sigil')
+        .attr('text-anchor','middle')
+        .attr('dy','0.35em')
+        .attr('font-size',d=>nr(d)*0.9)
+        .attr('fill','rgba(0,0,0,.4)')
+        .attr('pointer-events','none')
+        .text(d=>C[d.kind]?C[d.kind][4]:'●');
+      // Label
+      grp.append('text').attr('class','n-label')
+        .attr('text-anchor','middle')
+        .attr('dy',d=>nr(d)+16)
+        .attr('font-size',d=>d.weight>7?13:d.weight>4?11:10)
+        .attr('fill','#e8dcc8')
+        .attr('font-weight',d=>d.weight>7?700:400)
+        .attr('pointer-events','none')
+        .attr('opacity',.75)
+        .text(d=>d.label.length>6?d.label.slice(0,5)+'…':d.label);
+      return grp;
+    },
+    update=>update,
+    exit=>exit.remove()
+  );
 
-  // Node circles
-  nodeSel.append('circle')
-    .attr('class', d => 'node-circle ' + (GLOW_FILTERS[d.kind] || ''))
-    .attr('r', d => nodeRadius(d))
-    .attr('fill', d => COLORS[d.kind] || COLORS.unknown)
-    .attr('fill-opacity', .85)
-    .on('click', (e, d) => { e.stopPropagation(); selectNode(d); })
-    .on('mouseenter', (e, d) => highlightNeighbors(d))
-    .on('mouseleave', clearHighlight)
-    .on('mousemove', (e, d) => showTooltip(e, d))
-    .on('mouseout', hideTooltip);
+  nodeG.select('.n-main')
+    .on('click',(e,d)=>{e.stopPropagation();openPanel(d)})
+    .on('mouseenter',(e,d)=>highlight(d))
+    .on('mouseleave',clearHL)
+    .on('mousemove',(e,d)=>{showTip(e,d.label,KIND[d.kind]||d.kind)})
+    .on('mouseout',hideTip);
 
-  // Node labels
-  nodeSel.append('text')
-    .attr('class','node-label')
-    .attr('dy', d => nodeRadius(d) + 14)
-    .attr('font-size', d => d.weight > 7 ? 12 : 10)
-    .text(d => d.label.length > 6 ? d.label.slice(0,5) + '…' : d.label);
-
-  // Tick
-  sim.on('tick', () => {
-    edgeSel.attr('d', d => {
-      const dx = d.target.x - d.source.x, dy = d.target.y - d.source.y;
-      const dr = Math.sqrt(dx*dx + dy*dy) * 1.8;
+  sim.on('tick',()=>{
+    link.attr('d',d=>{
+      const dx=d.target.x-d.source.x, dy=d.target.y-d.source.y;
+      const dr=Math.sqrt(dx*dx+dy*dy)*2;
       return `M${d.source.x},${d.source.y}A${dr},${dr} 0 0,1 ${d.target.x},${d.target.y}`;
     });
-    edgeLabelSel
-      .attr('x', d => (d.source.x + d.target.x) / 2)
-      .attr('y', d => (d.source.y + d.target.y) / 2 - 3);
-    nodeSel.attr('transform', d => `translate(${d.x},${d.y})`);
+    linkLabel.attr('x',d=>(d.source.x+d.target.x)/2).attr('y',d=>(d.source.y+d.target.y)/2-4);
+    nodeG.attr('transform',d=>`translate(${d.x},${d.y})`);
   });
 }
 
-function nodeRadius(d) {
-  const w = d.weight || 1;
-  return Math.max(6, Math.min(24, 4 + w * 1.8));
+function nr(d){return Math.max(8,Math.min(28,5+d.weight*1.7))}
+
+// ── Interaction ──
+function highlight(n){
+  const nbrs=new Set([n.id]);
+  links.forEach(l=>{
+    const s=l.source.id,t=l.target.id;
+    if(s===n.id)nbrs.add(t);if(t===n.id)nbrs.add(s);
+  });
+  nodeG.transition().duration(200).style('opacity',d=>nbrs.has(d.id)?1:.12);
+  link.transition().duration(200).style('opacity',d=>{
+    const s=d.source.id,t=d.target.id;
+    return(s===n.id||t===n.id)?.7:.03;
+  }).attr('stroke-width',d=>{
+    const s=d.source.id,t=d.target.id;
+    return(s===n.id||t===n.id)?2.5+.8*(d.weight||1):.5;
+  });
+  linkLabel.transition().duration(200).attr('opacity',d=>{
+    const s=d.source.id,t=d.target.id;
+    return(s===n.id||t===n.id)?.8:0;
+  });
+  nodeG.select('.n-glow').transition().duration(200).attr('stroke-opacity',d=>d.id===n.id?.4:.1);
+}
+function clearHL(){
+  nodeG.transition().duration(300).style('opacity',1);
+  link.transition().duration(300).style('opacity',null);
+  linkLabel.transition().duration(300).attr('opacity',0);
+  nodeG.select('.n-glow').transition().duration(300).attr('stroke-opacity',.15);
 }
 
-// ═══════════════════════════════════════════════
-//  Interactions
-// ═══════════════════════════════════════════════
-function selectNode(node) {
-  selectedNode = node;
-  highlightNeighbors(node);
+// ── Panel ──
+function openPanel(n){
+  highlight(n);
+  const rels = links.filter(l=>{
+    const s=l.source.id||l.source,t=l.target.id||l.target;
+    return s===n.id||t===n.id;
+  }).sort((a,b)=>(b.weight||1)-(a.weight||1));
 
-  const related = edges
-    .filter(e => {
-      const s = e.source.id || e.source, t = e.target.id || e.target;
-      return s === node.id || t === node.id;
-    })
-    .sort((a, b) => (b.weight || 1) - (a.weight || 1));
+  const col = C[n.kind]?C[n.kind][0]:'#888';
+  const col2 = C[n.kind]?C[n.kind][1]:'#aaa';
 
-  const maxW = Math.max(...related.map(e => e.weight || 1), 1);
+  let h = `<div class="kind-orb" style="color:${col};background:radial-gradient(circle,${col}22,transparent)">${C[n.kind]?C[n.kind][4]:'●'}</div>`;
+  h += `<h2>${n.label}</h2>`;
+  h += `<div class="latin-name">${n.id}</div>`;
 
-  let html = `<span class="kind-tag" style="background:${COLORS[node.kind]}22; color:${COLORS[node.kind]} border:1px solid ${COLORS[node.kind]}44; padding:3px 10px; border-radius:12px; font-size:11px;">${KIND_ZH[node.kind] || node.kind}</span>`;
-  html += `<h2>${node.label}</h2>`;
-  html += `<div class="alias" style="font-size:12px; color:var(--dim); margin-bottom:12px;">${node.id}</div>`;
+  // Weight ring
+  const pct = Math.min((n.weight||1)/10*100,100);
+  h += `<div class="weight-ring"><svg width="80" height="80"><circle cx="40" cy="40" r="34" fill="none" stroke="rgba(201,169,97,.08)" stroke-width="3"/><circle cx="40" cy="40" r="34" fill="none" stroke="${col}" stroke-width="3" stroke-linecap="round" stroke-dasharray="${pct*2.14} 214"/></svg><div class="val">${(n.weight||0).toFixed(1)}</div></div>`;
 
-  html += `<div class="weight-bar"><div class="weight-fill" style="width:${Math.min(100, (node.weight / 10) * 100)}%; background:${COLORS[node.kind]}"></div></div>`;
-  html += `<div style="font-size:12px; color:var(--dim); margin-bottom:20px;">权重: <b style="color:${COLORS[node.kind]}">${node.weight?.toFixed(1) || 1}</b></div>`;
+  if(rels.length){
+    // Group by relation type
+    const groups = {};
+    rels.forEach(r=>{
+      const type = r.relation;
+      if(!groups[type])groups[type]=[];
+      groups[type].push(r);
+    });
 
-  if (related.length) {
-    html += `<h5>关系 (${related.length})</h5>`;
-    related.forEach(e => {
-      const isSource = (e.source.id || e.source) === node.id;
-      const otherId = isSource ? (e.target.id || e.target) : (e.source.id || e.source);
-      const other = nodes.find(n => n.id === otherId);
-      const otherLabel = other ? other.label : otherId;
-      const otherColor = other ? COLORS[other.kind] || COLORS.unknown : COLORS.unknown;
-      const w = ((e.weight || 1) / maxW * 100).toFixed(0);
-      html += `<div class="rel-item" data-id="${otherId}" onclick="jumpToNode('${otherId}')">
-        <span class="mini-dot" style="background:${otherColor}"></span>
-        <span>${isSource ? '→' : '←'}</span>
-        <span style="color:${COLORS[node.kind]}">${e.relation}</span>
-        <span class="rel-arrow">()</span>
-        <span style="color:#e2e8f0">${otherLabel}</span>
-      </div>`;
+    h += `<div class="section-title">Nexus · ${rels.length} Connections</div>`;
+    Object.entries(groups).forEach(([type,rs])=>{
+      h += `<div class="rel-group"><div class="rel-group-title">${type}</div>`;
+      rs.slice(0,12).forEach(r=>{
+        const isOut = (r.source.id||r.source)===n.id;
+        const oid = isOut?(r.target.id||r.target):(r.source.id||r.source);
+        const other = nodes.find(x=>x.id===oid);
+        const oc = other?(C[other.kind]?C[other.kind][0]:'#666'):'#666';
+        const os = other?(C[other.kind]?C[other.kind][4]:'●'):'●';
+        h += `<div class="rel-item" onclick="jumpNode('${oid}')">
+          <div class="mini-orb" style="color:${oc};border:1px solid ${oc}33">${os}</div>
+          <div class="rel-text">${other?other.label:oid}</div>
+          <div class="rel-type">${isOut?'→':'←'} ${type}</div>
+        </div>`;
+      });
+      if(rs.length>12)h += `<div style="font-size:10px;color:var(--gold-dim);padding:4px 10px;opacity:.6">...+${rs.length-12} more</div>`;
+      h += `</div>`;
     });
   }
 
-  document.getElementById('detail-content').innerHTML = html;
-  document.getElementById('detail').classList.add('open');
+  document.getElementById('panel-c').innerHTML=h;
+  document.getElementById('panel').classList.add('open');
 }
+function closePanel(){document.getElementById('panel').classList.remove('open');clearHL()}
+function jumpNode(id){const n=nodes.find(x=>x.id===id);if(n)openPanel(n)}
 
-function closeDetail() {
-  document.getElementById('detail').classList.remove('open');
-  selectedNode = null;
-  clearHighlight();
-}
-
-function jumpToNode(id) {
-  const node = nodes.find(n => n.id === id);
-  if (node) selectNode(node);
-}
-
-function highlightNeighbors(node) {
-  const neighborIds = new Set();
-  neighborIds.add(node.id);
-  edges.forEach(e => {
-    const s = e.source.id || e.source, t = e.target.id || e.target;
-    if (s === node.id) neighborIds.add(t);
-    if (t === node.id) neighborIds.add(s);
-  });
-
-  g.selectAll('.node-group')
-    .classed('highlight', d => d.id === node.id)
-    .classed('dim', d => !neighborIds.has(d.id));
-  g.selectAll('.edge')
-    .classed('dim', d => {
-      const s = d.source.id || d.source, t = d.target.id || d.target;
-      return s !== node.id && t !== node.id;
-    })
-    .classed('highlight', d => {
-      const s = d.source.id || d.source, t = d.target.id || d.target;
-      return s === node.id || t === node.id;
-    });
-  g.selectAll('.edge-label').classed('show', d => {
-    const s = d.source.id || d.source, t = d.target.id || d.target;
-    return s === node.id || t === node.id;
-  });
-}
-
-function clearHighlight() {
-  g.selectAll('.node-group').classed('highlight', false).classed('dim', false);
-  g.selectAll('.edge').classed('dim', false).classed('highlight', false);
-  g.selectAll('.edge-label').classed('show', false);
-}
-
-// ═══════════════════════════════════════════════
-//  Filters
-// ═══════════════════════════════════════════════
-document.querySelectorAll('.chip').forEach(chip => {
-  chip.addEventListener('click', () => {
-    const kind = chip.dataset.kind;
-    if (chip.classList.contains('active')) {
-      chip.classList.remove('active');
-      activeFilters.delete(kind);
-    } else {
-      chip.classList.add('active');
-      activeFilters.add(kind);
-    }
+// ── Filters ──
+document.querySelectorAll('.filter-btn').forEach(b=>{
+  b.addEventListener('click',()=>{
+    const k=b.dataset.k;
+    if(b.classList.contains('active')){b.classList.remove('active');activeK.delete(k)}
+    else{b.classList.add('active');activeK.add(k)}
     render();
   });
 });
 
-// ═══════════════════════════════════════════════
-//  Search
-// ═══════════════════════════════════════════════
-document.getElementById('search').addEventListener('input', function() {
-  const q = this.value.trim().toLowerCase();
-  if (!q) { clearHighlight(); return; }
-  const matched = nodes.filter(n =>
-    n.label.toLowerCase().includes(q) || n.id.toLowerCase().includes(q)
-  );
-  if (matched.length === 1) {
-    selectNode(matched[0]);
-    centerNode(matched[0]);
-  } else {
-    const ids = new Set(matched.map(n => n.id));
-    g.selectAll('.node-group').classed('dim', d => !ids.has(d.id));
-    g.selectAll('.edge').classed('dim', true);
-    g.selectAll('.edge-label').classed('show', false);
+// ── Search ──
+document.getElementById('search').addEventListener('input',function(){
+  const q=this.value.trim().toLowerCase();
+  if(!q){clearHL();return}
+  const m=nodes.filter(n=>n.label.toLowerCase().includes(q)||n.id.toLowerCase().includes(q));
+  if(m.length===1){openPanel(m[0]);centerNode(m[0])}
+  else{
+    const ids=new Set(m.map(n=>n.id));
+    nodeG.transition().duration(200).style('opacity',d=>ids.has(d.id)?1:.08);
+    link.transition().duration(200).style('opacity',.02);
   }
 });
 
-function centerNode(node) {
-  if (node.x == null) return;
-  const t = d3.zoomIdentity.translate(width/2, height/2).scale(1.2).translate(-node.x, -node.y);
-  svg.transition().duration(750).call(zoom.transform, t);
+function centerNode(n){
+  if(n.x==null)return;
+  const t=d3.zoomIdentity.translate(W()/2,H()/2).scale(1.4).translate(-n.x,-n.y);
+  svg.transition().duration(800).call(zoom.transform,t);
 }
 
-// ═══════════════════════════════════════════════
-//  Tooltip
-// ═══════════════════════════════════════════════
-const tooltip = document.getElementById('tooltip');
-function showTooltip(e, d) {
-  tooltip.style.opacity = 1;
-  tooltip.style.left = (e.pageX + 14) + 'px';
-  tooltip.style.top = (e.pageY - 8) + 'px';
-  tooltip.textContent = `${d.label} (${KIND_ZH[d.kind] || d.kind})`;
-}
-function hideTooltip() { tooltip.style.opacity = 0; }
-
-// ═══════════════════════════════════════════════
-//  Drag
-// ═══════════════════════════════════════════════
-function dragStart(e, d) { if (!e.active) sim.alphaTarget(.3).restart(); d.fx = d.x; d.fy = d.y; }
-function dragMove(e, d) { d.fx = e.x; d.fy = e.y; }
-function dragEnd(e, d) { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }
-
-// ═══════════════════════════════════════════════
-//  Controls
-// ═══════════════════════════════════════════════
-function zoomIn() { svg.transition().duration(300).call(zoom.scaleBy, 1.4); }
-function zoomOut() { svg.transition().duration(300).call(zoom.scaleBy, 0.7); }
-function resetView() { svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity); }
-function togglePhysics() {
-  physicsOn = !physicsOn;
-  if (physicsOn) { sim.alphaTarget(.3).restart(); } else { sim.stop(); }
+// ── Controls ──
+function zoomIn(){svg.transition().duration(300).call(zoom.scaleBy,1.5)}
+function zoomOut(){svg.transition().duration(300).call(zoom.scaleBy,0.67)}
+function resetView(){svg.transition().duration(600).call(zoom.transform,d3.zoomIdentity)}
+function togglePhysics(){
+  physicsOn=!physicsOn;
+  if(physicsOn)sim.alphaTarget(.3).restart();else sim.stop();
 }
 
-// ═══════════════════════════════════════════════
-//  Particle background
-// ═══════════════════════════════════════════════
-const particleCanvas = document.getElementById('canvas');
-const ctx = particleCanvas.getContext('2d');
-let particles = [];
+// ── Tooltip ──
+const tip=document.getElementById('tooltip');
+function showTip(e,l,c){tip.innerHTML=`<div class="ttl">${l}</div><div class="cat">${c}</div>`;tip.style.opacity=1;tip.style.left=(e.clientX+16)+'px';tip.style.top=(e.clientY-10)+'px'}
+function hideTip(){tip.style.opacity=0}
 
-function initParticles() {
-  particleCanvas.width = window.innerWidth;
-  particleCanvas.height = window.innerHeight;
-  particles = [];
-  for (let i = 0; i < 60; i++) {
-    particles.push({
-      x: Math.random() * particleCanvas.width,
-      y: Math.random() * particleCanvas.height,
-      r: Math.random() * 1.5 + .5,
-      vx: (Math.random() - .5) * .3,
-      vy: (Math.random() - .5) * .3,
-      a: Math.random() * .3 + .1
-    });
-  }
-}
-
-function drawParticles() {
-  ctx.clearRect(0, 0, particleCanvas.width, particleCanvas.height);
-  particles.forEach(p => {
-    p.x += p.vx; p.y += p.vy;
-    if (p.x < 0) p.x = particleCanvas.width;
-    if (p.x > particleCanvas.width) p.x = 0;
-    if (p.y < 0) p.y = particleCanvas.height;
-    if (p.y > particleCanvas.height) p.y = 0;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(96,165,250,${p.a})`;
-    ctx.fill();
-  });
-
-  // Draw faint connections
-  for (let i = 0; i < particles.length; i++) {
-    for (let j = i + 1; j < particles.length; j++) {
-      const dx = particles[i].x - particles[j].x;
-      const dy = particles[i].y - particles[j].y;
-      const dist = Math.sqrt(dx*dx + dy*dy);
-      if (dist < 100) {
-        ctx.beginPath();
-        ctx.moveTo(particles[i].x, particles[i].y);
-        ctx.lineTo(particles[j].x, particles[j].y);
-        ctx.strokeStyle = `rgba(96,165,250,${.05 * (1 - dist/100)})`;
-        ctx.lineWidth = .5;
-        ctx.stroke();
-      }
-    }
-  }
-  requestAnimationFrame(drawParticles);
-}
-
-// ═══════════════════════════════════════════════
-//  Resize
-// ═══════════════════════════════════════════════
-window.addEventListener('resize', () => {
-  const w = window.innerWidth, h = window.innerHeight;
-  svg.attr('width', w).attr('height', h);
-  initParticles();
-  if (sim) sim.force('center', d3.forceCenter(w/2, h/2)).alpha(.3).restart();
+// ── Resize ──
+window.addEventListener('resize',()=>{
+  if(sim)sim.force('center',d3.forceCenter(W()/2,H()/2)).alpha(.2).restart();
 });
 
-// ═══════════════════════════════════════════════
-//  Fetch data
-// ═══════════════════════════════════════════════
-async function loadData() {
-  try {
-    const res = await fetch('/api/graph');
-    const data = await res.json();
+// ── Load ──
+async function load(){
+  try{
+    const r=await fetch('/api/graph');
+    const d=await r.json();
+    const gd=(d.nodes&&d.edges)?d:{nodes:[],edges:[]};
 
-    let graphData;
-    if (data.nodes && data.edges) {
-      graphData = data;
-    } else if (data.data && data.data.nodes) {
-      graphData = data.data;
-    } else {
-      graphData = { nodes: [], edges: [] };
-    }
+    nodes=gd.nodes.map(n=>({...n}));
+    links=gd.edges.map(l=>({...l}));
 
-    // If no has real data but no nodes, try alternate endpoints
-    if (graphData.nodes.length === 0) {
-      const res2 = await fetch('/api/stats');
-      const stats = await res2.json();
-      if (stats && stats.total_nodes > 0) {
-        const res3 = await fetch('/api/graph');
-        const d3 = await res3.json();
-        graphData = { nodes: d3.nodes || [], edges: d3.edges || [] };
-      }
-    }
+    document.getElementById('s-nodes').textContent=nodes.length;
+    document.getElementById('s-edges').textContent=links.length;
+    document.getElementById('s-types').textContent=new Set(nodes.map(n=>n.kind)).size;
 
-    document.getElementById('loading').classList.add('hide');
-    initSvg();
-    initParticles();
-    drawParticles();
-    buildGraph(graphData);
-  } catch (err) {
-    document.getElementById('loading').innerHTML = `<div style="text-align:center;color:#f87171;">
-      <p style="font-size:40px;margin-bottom:12px;">✕</p>
-      <p>无法加载图谱数据</p>
-      <p style="font-size:12px;color:var(--dim);margin-top:8px;">${err.message}</p>
-      <p style="font-size:11px;color:var(--dim);margin-top:16px;">请先运行:<br><code style="background:rgba(255,255,255,.1);padding:2px 6px;border-radius:4px;">lens view --data-dir ./demo_data</code></p>
+    setTimeout(()=>{
+      document.getElementById('loading').classList.add('hide');
+      initGraph();
+      render();
+    },400);
+  }catch(err){
+    document.getElementById('loading').innerHTML=`<div style="text-align:center;max-width:340px;padding:40px">
+      <div style="font-size:48px;color:var(--gold);margin-bottom:16px">✦</div>
+      <p style="font-family:'Cinzel',serif;color:var(--gold-bright);font-size:16px;margin-bottom:8px">The Codex Awaits</p>
+      <p style="font-size:13px;color:var(--gold-dim);line-height:1.6">${err.message}</p>
+      <p style="font-size:11px;color:var(--gold-dim);opacity:.5;margin-top:16px">lens view --data-dir ./demo_data</p>
     </div>`;
   }
 }
-
-loadData();
+load();
 </script>
 </body>
 </html>
