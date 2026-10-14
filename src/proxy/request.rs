@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
-use crate::adapter::{identify, AgentKind};
 use super::parser::{LlmRequest, RequestParser};
+use crate::adapter::{identify, AgentKind};
 
 /// 解析请求数据，返回 `(LlmRequest, agent_type)` 或 None（非 LLM 请求）。
 ///
@@ -48,6 +48,11 @@ pub fn parse_request_str(req_str: &str) -> Option<(LlmRequest, String)> {
         AgentKind::ClaudeCode => "claude-code",
         AgentKind::Trae => "trae",
         AgentKind::KimiCode => "kimi-code",
+        AgentKind::Qoder => "qoder",
+        AgentKind::KiloCode => "kilocode",
+        AgentKind::OpenClaw => "openclaw",
+        AgentKind::GeminiCli => "gemini-cli",
+        AgentKind::Cursor => "cursor",
         AgentKind::Unknown(_) => "unknown",
     };
 

@@ -60,6 +60,8 @@ thiserror = "2"
 directories = "5"
 duct = "0.13"
 homedir = "0.3"
+ts-rs = { version = "10", features = ["serde-compat"] }
+toml = "0.8"
 
 [profile.release]
 opt-level = 2

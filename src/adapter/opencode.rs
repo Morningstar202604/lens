@@ -13,17 +13,17 @@ pub struct OpenCodeContext {
     pub session_id: Option<String>,
 }
 
-pub fn extract_context(body: &Value, headers: &std::collections::HashMap<String, String>) -> OpenCodeContext {
+pub fn extract_context(
+    body: &Value,
+    headers: &std::collections::HashMap<String, String>,
+) -> OpenCodeContext {
     OpenCodeContext {
-        version: headers
-            .get("x-opencode-version")
-            .cloned()
-            .or_else(|| body["metadata"]["opencode_version"].as_str().map(String::from)),
-        workspace: body["metadata"]["cwd"]
-            .as_str()
-            .map(String::from),
-        session_id: body["metadata"]["session_id"]
-            .as_str()
-            .map(String::from),
+        version: headers.get("x-opencode-version").cloned().or_else(|| {
+            body["metadata"]["opencode_version"]
+                .as_str()
+                .map(String::from)
+        }),
+        workspace: body["metadata"]["cwd"].as_str().map(String::from),
+        session_id: body["metadata"]["session_id"].as_str().map(String::from),
     }
 }

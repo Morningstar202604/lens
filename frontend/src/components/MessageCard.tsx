@@ -1,8 +1,8 @@
-import type { Message } from '../types';
+import type { ViewMessage } from '../types';
 import { Markdown } from './Markdown';
 
 interface Props {
-  message: Message;
+  message: ViewMessage;
 }
 
 const roleLabels: Record<string, string> = {

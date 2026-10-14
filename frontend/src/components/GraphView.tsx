@@ -20,22 +20,8 @@ import { GraphPanel } from './GraphPanel';
 interface SimNode extends GraphNode { x?: number; y?: number; fx?: number | null; fy?: number | null; vx?: number; vy?: number; index?: number }
 interface SimLink { source: SimNode | string; target: SimNode | string; relation: string; weight: number }
 
-// ── Colour system ──────────────────────────────────────────────────────────
-const PALETTE: Record<string, { base: string; glow: string; label: string; sigil: string }> = {
-  character: { base: '#c9a961', glow: '#f0d48a', label: '角色', sigil: '◈' },
-  location:  { base: '#22c55e', glow: '#86efac', label: '地点', sigil: '◉' },
-  family:    { base: '#a78bfa', glow: '#ddd6fe', label: '家族', sigil: '◆' },
-  event:     { base: '#ef4444', glow: '#fca5a5', label: '事件', sigil: '✧' },
-  skill:     { base: '#f97316', glow: '#fed7aa', label: '技能', sigil: '⟐' },
-  artifact:  { base: '#06b6d4', glow: '#a5f3fc', label: '神器', sigil: '◇' },
-  theme:     { base: '#ec4899', glow: '#fbcfe8', label: '主题', sigil: '❖' },
-  file:      { base: '#6366f5', glow: '#a5b4fc', label: '文件', sigil: '▤' },
-  function:  { base: '#06b6d4', glow: '#a5f3fc', label: '函数', sigil: 'ƒ' },
-  topic:     { base: '#f59b0b', glow: '#fde68a', label: '话题', sigil: '✦' },
-};
-const UNKNOWN = { base: '#6b7280', glow: '#9ca3af', label: '其他', sigil: '●' };
-
-function palette(kind: string) { return PALETTE[kind] ?? UNKNOWN; }
+// ── Colour system（与 GraphPanel 共用的代码域调色板）────────────────────
+import { GRAPH_PALETTE, kindPalette as palette } from '../graph-palette';
 
 interface Props {
   data: GraphData | null;
@@ -48,6 +34,7 @@ export function GraphView({ data, onDataChange, onSelectNode }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const gRef = useRef<SVGGElement | null>(null);
   const simRef = useRef<any>(null);
+  const centerRef = useRef<((id: string) => void) | null>(null);
   const zoomBehavior = useRef<any>(null);
 
   const [query, setQuery] = useState('');
@@ -203,6 +190,10 @@ export function GraphView({ data, onDataChange, onSelectNode }: Props) {
       hlNode(n);
     }
 
+    centerRef.current = (id: string) => {
+      const node = fNodes.find((x) => x.id === id);
+      if (node) centerNode(node);
+    };
     function centerNode(n: SimNode) {
       if (n.x == null || n.y == null || !svgRef.current || !zoomBehavior.current) return;
       const w = svgRef.current.clientWidth, h = svgRef.current.clientHeight;
@@ -225,7 +216,7 @@ export function GraphView({ data, onDataChange, onSelectNode }: Props) {
     svg.selectAll('*').remove();
 
     const defsEl = svg.append('defs');
-    Object.entries(PALETTE).forEach(([kind, p]) => {
+    Object.entries(GRAPH_PALETTE).forEach(([kind, p]) => {
       const grad = defsEl.append('radialGradient').attr('id', `grad-${kind}`).attr('cx', '35%').attr('cy', '30%');
       grad.append('stop').attr('offset', '0%').attr('stop-color', p.glow);
       grad.append('stop').attr('offset', '100%').attr('stop-color', p.base);
@@ -292,11 +283,11 @@ export function GraphView({ data, onDataChange, onSelectNode }: Props) {
       <div class="flex items-center gap-4 px-4 py-3 border-b border-border">
         <div class="relative flex-1 max-w-md">
           <span class="absolute left-3 top-1/2 -translate-y-1/2 text-text-3 text-sm">⌖</span>
-          <input value={query} onInput={e => handleSearch((e.target as HTMLInputElement).value)} placeholder="Search entities..."
+          <input value={query} onInput={e => handleSearch((e.target as HTMLInputElement).value)} placeholder="搜索实体..."
             class="w-full pl-9 pr-3 py-1.5 text-sm bg-bg border border-border rounded-full text-text placeholder:text-text-4 focus:outline-none focus:border-primary/50 transition-colors" />
         </div>
-        <span class="text-xs text-text-3 tabular-nums">{visible.nodes.length} nodes</span>
-        <span class="text-xs text-text-3 tabular-nums">{visible.edges.length} edges</span>
+        <span class="text-xs text-text-3 tabular-nums">{visible.nodes.length} 个节点</span>
+        <span class="text-xs text-text-3 tabular-nums">{visible.edges.length} 条边</span>
       </div>
 
       <div ref={wrapRef} class="flex-1 relative overflow-hidden" style={{ background: 'radial-gradient(ellipse at 50% 40%, #0f1428 0%, #080a14 70%, #060710 100%)' }}>
@@ -306,13 +297,13 @@ export function GraphView({ data, onDataChange, onSelectNode }: Props) {
         {loading && (
           <div class="absolute inset-0 flex flex-col items-center justify-center z-10">
             <div class="w-10 h-10 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-            <p class="mt-3 text-xs text-text-3 tracking-widest uppercase">Invoking Graph</p>
+            <p class="mt-3 text-xs text-text-3 tracking-widest uppercase">图谱加载中</p>
           </div>
         )}
         {!loading && visible.nodes.length < 2 && (
           <div class="absolute inset-0 flex flex-col items-center justify-center z-10 text-text-4">
             <div class="text-4xl mb-3 opacity-30">✦</div>
-            <div class="text-sm">Insufficient data</div>
+            <div class="text-sm">数据不足</div>
           </div>
         )}
 
@@ -344,7 +335,7 @@ export function GraphView({ data, onDataChange, onSelectNode }: Props) {
         {selNode && (
           <GraphPanel node={selNode} data={data!}
             onClose={() => { setSelNode(null); onSelectNode(null); if (gRef.current) { select(gRef.current).selectAll('.nodes g').style('opacity', 1).selectAll('.edges path').style('opacity', null).attr('stroke-width', null); } }}
-            onJump={(id) => { const n = data?.nodes.find(x => x.id === id); if (n) { setSelNode(n); onSelectNode(n); if (svgRef.current && zoomBehavior.current) centerNodeById(n.id); } }}
+            onJump={(id) => { const n = data?.nodes.find(x => x.id === id); if (n) { setSelNode(n); onSelectNode(n); centerRef.current?.(n.id); } }}
           />
         )}
       </div>
@@ -353,5 +344,3 @@ export function GraphView({ data, onDataChange, onSelectNode }: Props) {
 }
 
 function nodeRadius(d: SimNode): number { return Math.max(7, Math.min(24, 5 + d.weight * 1.6)); }
-
-function centerNodeById(id: string) { /* reposition on jump */ }

@@ -15,7 +15,7 @@ import os
 import sqlite3
 import sys
 
-DB_PATH = "./demo_data/lens.db"
+DB_PATH = "./demo_data/novel/lens.db"
 
 NODES = [
     # ──────────────── 主角与核心角色 ────────────────

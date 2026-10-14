@@ -1,22 +1,26 @@
 //! 关系图谱生成（代码/概念/决策依赖网络）
 //!
-//! 从对话轮次中提取实体（文件、函数、工具、话题），
-//! 按共现关系构建依赖网络，写入 SQLite。
+//! 从对话轮次中提取实体（文件、函数、话题），按共现关系构建依赖网络，写入 SQLite。
+//!
+//! 会话归属：每个会话的实体/边以 `session_id` 列归属；重建只影响本会话，
+//! 演示数据（session_id 为 NULL）不受会话重建影响。
 
 use anyhow::Result;
 use regex::Regex;
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::store::{GraphNode, GraphEdge, Store};
+use super::store::{GraphEdge, GraphNode, Store};
+
+/// 全局图谱读取上限（防无界拉取）。
+pub const GLOBAL_GRAPH_NODE_LIMIT: i64 = 800;
+pub const GLOBAL_GRAPH_EDGE_LIMIT: i64 = 1500;
 
 lazy_static::lazy_static! {
     /// 匹配文件路径 */
     static ref RE_FILE: Regex = Regex::new(r"`?([/\w.-]+\.(?:ts|tsx|js|jsx|py|sql|css|html|json|toml|rs|go|md))`?").unwrap();
     /// 匹配函数/方法名 */
     static ref RE_FUNC: Regex = Regex::new(r"(?:function\s+|def\s+|fn\s+|const\s+|let\s+|export\s+(?:async\s+)?(?:function|default)\s+)(\w+)").unwrap();
-    /// 匹配代码块中的 import/require */
-    static ref RE_IMPORT: Regex = Regex::new(r#"(?:import|require)\s*\(?['"]([^'"]+)['"]\)?"#).unwrap();
 }
 
 /// 提取单个轮次的文本内容（用于实体抽取）
@@ -26,7 +30,10 @@ fn extract_text_from_turn(request_json: &str, response_json: &str) -> String {
         if let Some(msgs) = req["messages"].as_array() {
             for m in msgs {
                 match m["content"].as_str() {
-                    Some(t) => { text.push_str(t); text.push(' '); }
+                    Some(t) => {
+                        text.push_str(t);
+                        text.push(' ');
+                    }
                     None => {
                         if let Some(blocks) = m["content"].as_array() {
                             for b in blocks {
@@ -48,7 +55,8 @@ fn extract_text_from_turn(request_json: &str, response_json: &str) -> String {
                     text.push_str(t);
                     text.push(' ');
                 }
-            }        }
+            }
+        }
     }
     text
 }
@@ -80,75 +88,88 @@ fn extract_topics(text: &str) -> Vec<&'static str> {
         .collect()
 }
 
-/// 分析会话构建关系图谱
+/// 分析会话构建关系图谱。
 ///
-/// 从该 session 的全部 turns 中抽取实体并写入 nodes / edges 表，
-/// 返回 (nodes, edges) 供前端渲染。
-pub fn build_graph(data_dir: &Path, session_id: Option<&str>) -> Result<(Vec<GraphNode>, Vec<GraphEdge>)> {
+/// 从该 session 的全部 turns 中抽取实体并写入 nodes / edges 表（带 session_id），
+/// 重建只清除并重写本会话的实体；返回 (nodes, edges) 供前端渲染。
+pub fn build_graph(
+    data_dir: &Path,
+    session_id: Option<&str>,
+) -> Result<(Vec<GraphNode>, Vec<GraphEdge>)> {
     let store = Store::open(data_dir)?;
-    let conn = store.conn.lock().map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
+    let conn = store
+        .conn
+        .lock()
+        .map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
 
-    // 1. 取该 session 的 turns（或全部）
     let turn_rows: Vec<(String, String)> = if let Some(sid) = session_id {
-        let mut stmt = conn.prepare("SELECT request_json, response_json FROM turns WHERE session_id = ? ORDER BY timestamp")?;
+        let mut stmt = conn.prepare(
+            "SELECT request_json, response_json FROM turns WHERE session_id = ? ORDER BY timestamp",
+        )?;
         let rows = stmt.query_map([sid], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
         })?;
         rows.filter_map(|r| r.ok()).collect()
     } else {
-        let mut stmt = conn.prepare("SELECT request_json, response_json FROM turns ORDER BY timestamp")?;
-        let rows = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })?;
+        let mut stmt =
+            conn.prepare("SELECT request_json, response_json FROM turns ORDER BY timestamp")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         rows.filter_map(|r| r.ok()).collect()
     };
 
     if turn_rows.is_empty() {
-        // 没有 turns → 返回空
-        let empty_nodes: Vec<GraphNode> = Vec::new();
-        let empty_edges: Vec<GraphEdge> = Vec::new();
-        return Ok((empty_nodes, empty_edges));
+        return Ok((Vec::new(), Vec::new()));
     }
 
-    // 2. 逐轮提取实体，统计权重和共现
-    let mut node_weights: HashMap<String, (String, f64)> = HashMap::new(); // id -> (kind, weight)
+    let scope = session_id.unwrap_or("all");
+
+    // 1. 逐轮提取实体，统计权重和共现（实体 id 以会话为前缀，跨会话不串）
+    let scoped_id = |entity: &str| format!("{scope}#{entity}");
+    let mut node_weights: HashMap<String, (String, f64)> = HashMap::new();
     let mut cooccurrence: HashMap<(String, String), f64> = HashMap::new();
 
     for (req_json, resp_json) in &turn_rows {
         let text = extract_text_from_turn(req_json, resp_json);
         let mut turn_entities: Vec<String> = Vec::new();
 
-        // 文件路径
         for cap in RE_FILE.captures_iter(&text) {
-            let path = cap[1].trim_start_matches('`').trim_end_matches('`').to_string();
+            let path = cap[1]
+                .trim_start_matches('`')
+                .trim_end_matches('`')
+                .to_string();
             if path.len() > 2 && !path.starts_with("http") {
-                let id = format!("file:{}", path);
-                let entry = node_weights.entry(id.clone()).or_insert_with(|| ("file".to_string(), 0.0));
+                let id = scoped_id(&format!("file:{path}"));
+                let entry = node_weights
+                    .entry(id.clone())
+                    .or_insert_with(|| ("file".to_string(), 0.0));
                 entry.1 += 1.0;
                 turn_entities.push(id);
             }
         }
-        // 函数名
         for cap in RE_FUNC.captures_iter(&text) {
             let name = cap[1].to_string();
-            if name.len() > 2 && !["function", "def", "const", "let", "return"].contains(&name.as_str()) {
-                let id = format!("fn:{}", name);
-                let entry = node_weights.entry(id.clone()).or_insert_with(|| ("function".to_string(), 0.0));
-                entry.1 += 0.5;  // 函数比文件权重低
+            if name.len() > 2
+                && !["function", "def", "const", "let", "return"].contains(&name.as_str())
+            {
+                let id = scoped_id(&format!("fn:{name}"));
+                let entry = node_weights
+                    .entry(id.clone())
+                    .or_insert_with(|| ("function".to_string(), 0.0));
+                entry.1 += 0.5;
                 turn_entities.push(id);
             }
         }
-        // 话题
         for topic in extract_topics(&text) {
-            let id = format!("topic:{}", topic);
-            let entry = node_weights.entry(id.clone()).or_insert_with(|| ("topic".to_string(), 0.0));
+            let id = scoped_id(&format!("topic:{topic}"));
+            let entry = node_weights
+                .entry(id.clone())
+                .or_insert_with(|| ("topic".to_string(), 0.0));
             entry.1 += 0.8;
             turn_entities.push(id);
         }
 
-        // 3. 统计共现（本 turn 内任意两个实体构成一条 co-occurrence 边）
         turn_entities.sort();
-        turn_entities.dedup();  // 去重
+        turn_entities.dedup();
         for i in 0..turn_entities.len() {
             for j in (i + 1)..turn_entities.len() {
                 let pair = (turn_entities[i].clone(), turn_entities[j].clone());
@@ -157,59 +178,90 @@ pub fn build_graph(data_dir: &Path, session_id: Option<&str>) -> Result<(Vec<Gra
         }
     }
 
-    // 4. 写入数据库
-    // 先清除该 session 缓存的图谱（避免陈旧数据）
-    let file_prefix = "file:%";
-    conn.execute("DELETE FROM nodes WHERE id LIKE ?", [file_prefix])?;
-    conn.execute("DELETE FROM edges WHERE source LIKE ?", [file_prefix])?;
+    // 2. 重建本会话：只清除本会话的实体/边（演示数据 session_id IS NULL 不受影响）
+    //    删除 + 重建包在同一事务里，中途失败不会留下半删状态。
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    let rebuild = (|| -> Result<()> {
+        conn.execute("DELETE FROM nodes WHERE session_id = ?", [session_id])?;
+        conn.execute("DELETE FROM edges WHERE session_id = ?", [session_id])?;
 
-    // 插入 nodes
-    let mut nodes: Vec<GraphNode> = Vec::new();
-    for (id, (kind, weight)) in &node_weights {
-        let label = id.split_once(':').map(|x| x.1).unwrap_or(id).to_string();
-        conn.execute(
-            "INSERT OR REPLACE INTO nodes (id, label, kind, weight) VALUES (?, ?, ?, ?)",
-            [id.as_str(), label.as_str(), kind.as_str(), &weight.to_string()],
-        )?;
-        nodes.push(GraphNode {
-            id: id.clone(),
-            label,
-            kind: kind.clone(),
-            weight: *weight,
-        });
+        for (id, (kind, weight)) in &node_weights {
+            let entity = id.split_once('#').map(|x| x.1).unwrap_or(id.as_str());
+            let label = entity
+                .split_once(':')
+                .map(|x| x.1)
+                .unwrap_or(entity)
+                .to_string();
+            conn.execute(
+                "INSERT OR REPLACE INTO nodes (id, label, kind, session_id, weight) VALUES (?, ?, ?, ?, ?)",
+                rusqlite::params![id.as_str(), label.as_str(), kind.as_str(), session_id, weight],
+            )?;
+        }
+
+        for ((src, tgt), weight) in &cooccurrence {
+            let relation = determine_relation(src, tgt);
+            conn.execute(
+                "INSERT OR REPLACE INTO edges (source, target, relation, session_id, weight) VALUES (?, ?, ?, ?, ?)",
+                rusqlite::params![src.as_str(), tgt.as_str(), relation.as_str(), session_id, weight],
+            )?;
+        }
+        Ok(())
+    })();
+    match rebuild {
+        Ok(()) => conn.execute_batch("COMMIT")?,
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            return Err(e);
+        }
     }
 
-    // 插入 edges
-    let mut edges: Vec<GraphEdge> = Vec::new();
-    for ((src, tgt), weight) in &cooccurrence {
-        let relation = determine_relation(src, tgt);
-        conn.execute(
-            "INSERT OR IGNORE INTO edges (source, target, relation, weight) VALUES (?, ?, ?, ?)",
-            [src.as_str(), tgt.as_str(), relation.as_str(), &weight.to_string()],
-        )?;
-        edges.push(GraphEdge {
+    let mut nodes: Vec<GraphNode> = node_weights
+        .iter()
+        .map(|(id, (kind, weight))| {
+            let entity = id.split_once('#').map(|x| x.1).unwrap_or(id.as_str());
+            let label = entity
+                .split_once(':')
+                .map(|x| x.1)
+                .unwrap_or(entity)
+                .to_string();
+            GraphNode {
+                id: id.clone(),
+                label,
+                kind: kind.clone(),
+                weight: *weight,
+            }
+        })
+        .collect();
+
+    let mut edges: Vec<GraphEdge> = cooccurrence
+        .iter()
+        .map(|((src, tgt), weight)| GraphEdge {
             source: src.clone(),
             target: tgt.clone(),
-            relation,
+            relation: determine_relation(src, tgt),
             weight: *weight,
-        });
-    }
+        })
+        .collect();
 
-    // 排序：按权重降序，取前 50 个节点
-    nodes.sort_by(|a, b| b.weight.partial_cmp(&a.weight).unwrap());
+    nodes.sort_by(|a, b| b.weight.total_cmp(&a.weight));
     nodes.truncate(50);
-    edges.sort_by(|a, b| b.weight.partial_cmp(&a.weight).unwrap());
+    edges.sort_by(|a, b| b.weight.total_cmp(&a.weight));
     edges.truncate(200);
 
     Ok((nodes, edges))
 }
 
-/// 根据节点 id 推断边的类型
+/// 根据实体 id 推断边的类型（id 形如 `{scope}#file:path`）。
 fn determine_relation(src: &str, tgt: &str) -> String {
-    match (src.split(':').next().unwrap_or(""), tgt.split(':').next().unwrap_or("")) {
+    match (entity_kind(src), entity_kind(tgt)) {
         ("file", "function") | ("function", "file") => "contains".to_string(),
         ("file", "file") | ("function", "function") => "references".to_string(),
         ("topic", _) | (_, "topic") => "related_to".to_string(),
         _ => "co_occurs".to_string(),
     }
+}
+
+fn entity_kind(id: &str) -> &str {
+    let entity = id.split_once('#').map(|x| x.1).unwrap_or(id);
+    entity.split(':').next().unwrap_or("")
 }

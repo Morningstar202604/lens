@@ -9,7 +9,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tracing::info;
 
-use crate::proxy::parser::{LlmRequest, LlmResponse};
+use crate::proxy::parser::{LlmRequest, LlmResponse, MessageContent};
+use ts_rs::TS;
+
+/// 当前 schema 版本。迁移逻辑见 `migrate`。
+const SCHEMA_VERSION: i64 = 1;
 
 pub struct Store {
     /// SQLite 连接（线程安全） */
@@ -18,6 +22,8 @@ pub struct Store {
 }
 
 impl Store {
+    /// 会话聚合时间窗（秒）。同一锚点在该窗口内归入同一会话。
+    pub const SESSION_WINDOW_SECS: i64 = 1800;
     pub fn open(data_dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(data_dir)?;
         let db_path = data_dir.join("lens.db");
@@ -32,9 +38,12 @@ impl Store {
             data_dir: data_dir.to_path_buf(),
         };
 
-        // 初始化 schema
+        // 初始化 schema（新库直接带 v1 列）
         {
-            let conn = store.conn.lock().map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
+            let conn = store
+                .conn
+                .lock()
+                .map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
             conn.execute_batch(
                 r#"
                 CREATE TABLE IF NOT EXISTS turns (
@@ -51,6 +60,7 @@ impl Store {
                     id TEXT PRIMARY KEY,
                     title TEXT NOT NULL,
                     project_path TEXT,
+                    source TEXT NOT NULL DEFAULT 'proxy',
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
@@ -59,6 +69,7 @@ impl Store {
                     id TEXT PRIMARY KEY,
                     label TEXT NOT NULL,
                     kind TEXT NOT NULL,
+                    session_id TEXT,
                     weight REAL DEFAULT 1.0,
                     first_seen DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
@@ -68,19 +79,64 @@ impl Store {
                     source TEXT NOT NULL,
                     target TEXT NOT NULL,
                     relation TEXT NOT NULL,
+                    session_id TEXT,
                     weight REAL DEFAULT 1.0,
                     UNIQUE(source, target, relation)
                 );
-
+                "#,
+            )?;
+            Self::migrate(&conn, &db_path)?;
+            conn.execute_batch(
+                r#"
                 CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id);
                 CREATE INDEX IF NOT EXISTS idx_turns_timestamp ON turns(timestamp);
                 CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source);
                 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target);
+                CREATE INDEX IF NOT EXISTS idx_nodes_session ON nodes(session_id);
+                CREATE INDEX IF NOT EXISTS idx_edges_session ON edges(session_id);
                 "#,
             )?;
         }
 
         Ok(store)
+    }
+
+    /// 旧库就地迁移：补列 + 版本号；迁移前留一份 .bak 备份。
+    fn migrate(conn: &rusqlite::Connection, db_path: &Path) -> Result<()> {
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version >= SCHEMA_VERSION {
+            return Ok(());
+        }
+        if version == 0 && db_path.exists() {
+            let backup = db_path.with_extension(format!("db.bak-v{version}"));
+            let _ = std::fs::copy(db_path, &backup);
+        }
+        if !Self::column_exists(conn, "sessions", "source")? {
+            conn.execute_batch(
+                "ALTER TABLE sessions ADD COLUMN source TEXT NOT NULL DEFAULT 'proxy';",
+            )?;
+        }
+        if !Self::column_exists(conn, "nodes", "session_id")? {
+            conn.execute_batch("ALTER TABLE nodes ADD COLUMN session_id TEXT;")?;
+        }
+        if !Self::column_exists(conn, "edges", "session_id")? {
+            conn.execute_batch("ALTER TABLE edges ADD COLUMN session_id TEXT;")?;
+        }
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        info!("数据库 schema 迁移至 v{}", SCHEMA_VERSION);
+        Ok(())
+    }
+
+    fn column_exists(conn: &rusqlite::Connection, table: &str, column: &str) -> Result<bool> {
+        let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == column {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// 记录一次 LLM 调用（同步接口）
@@ -92,25 +148,40 @@ impl Store {
         request: LlmRequest,
         response: LlmResponse,
     ) -> Result<()> {
-        let session_id = Self::extract_session_id(&request);
+        self.record_turn_with_source(agent_type, "proxy", request, response)
+    }
 
-        let mut conn = self.conn.lock().map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
-
-        let tx = conn.transaction()?;
-        tx.execute(
-            "INSERT INTO sessions (id, title, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
-             ON CONFLICT(id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP",
-            params![&session_id, &session_id],
-        )?;
-
-        let request_json = serde_json::to_string(&request)?;
-        let response_json = serde_json::to_string(&response)?;
-        // 优先使用从代理层传入的 agent_type，fallback 到请求体检测
+    /// 同 `record_turn`，可指定会话来源（proxy / import / …）。
+    pub fn record_turn_with_source(
+        &self,
+        agent_type: &str,
+        source: &str,
+        request: LlmRequest,
+        response: LlmResponse,
+    ) -> Result<()> {
         let resolved_agent = if agent_type != "unknown" && !agent_type.is_empty() {
             agent_type.to_string()
         } else {
             Self::detect_agent_type(&request)
         };
+        let now = chrono::Utc::now().timestamp();
+        let session_id = Self::session_id_at(&resolved_agent, &request, now);
+        let title = Self::session_title(&request);
+
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
+
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO sessions (id, title, source, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+             ON CONFLICT(id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP",
+            params![&session_id, &title, source],
+        )?;
+
+        let request_json = serde_json::to_string(&request)?;
+        let response_json = serde_json::to_string(&response)?;
 
         tx.execute(
             "INSERT INTO turns (id, session_id, agent_type, timestamp, request_json, response_json)
@@ -129,24 +200,29 @@ impl Store {
         Ok(())
     }
 
-    /// 列出所有会话
-    pub fn list_sessions(&self, limit: usize) -> Result<Vec<Session>> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
+    /// 列出所有会话（分页）
+    pub fn list_sessions(&self, limit: usize, offset: usize) -> Result<Vec<Session>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
         let mut stmt = conn.prepare(
             "SELECT s.id, s.title, s.created_at, s.updated_at,
                     COUNT(t.id) as msg_count,
-                    COALESCE(MAX(t.agent_type), 'unknown') as agent,
-                    COALESCE(json_extract(MAX(t.request_json), '$.model'), '') as model,
+                    COALESCE((SELECT t2.agent_type FROM turns t2 WHERE t2.session_id = s.id
+                              ORDER BY t2.timestamp DESC LIMIT 1), 'unknown') as agent,
+                    (SELECT json_extract(t3.request_json, '$.model') FROM turns t3
+                     WHERE t3.session_id = s.id ORDER BY t3.timestamp DESC LIMIT 1) as model,
                     COALESCE(SUM(json_extract(t.response_json, '$.usage.total_tokens')), 0) as total_tokens
              FROM sessions s
              LEFT JOIN turns t ON s.id = t.session_id
              GROUP BY s.id
              ORDER BY s.updated_at DESC
-             LIMIT ?",
+             LIMIT ? OFFSET ?",
         )?;
 
-        let rows = stmt.query_map([limit], |row| {
-            let model: String = row.get(6)?;
+        let rows = stmt.query_map([limit, offset], |row| {
+            let model: Option<String> = row.get(6)?;
             Ok(Session {
                 id: row.get(0)?,
                 title: row.get(1)?,
@@ -155,7 +231,7 @@ impl Store {
                 message_count: row.get(4)?,
                 agent_type: row.get(5)?,
                 project_path: None,
-                model: if model.is_empty() { None } else { Some(model) },
+                model,
                 total_tokens: row.get(7)?,
             })
         })?;
@@ -168,26 +244,41 @@ impl Store {
         Ok(sessions)
     }
 
-    /// 搜索会话 (标题模糊匹配)
-    pub fn search_sessions(&self, query: &str, limit: usize) -> Result<Vec<Session>> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
-        let pattern = format!("%{}%", query.trim());
+    /// 搜索会话 (标题模糊匹配;分页;LIKE 通配符已转义)
+    pub fn search_sessions(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Session>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
+        let raw = query.trim();
+        let escaped = raw
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let pattern = format!("%{escaped}%");
         let mut stmt = conn.prepare(
             "SELECT s.id, s.title, s.created_at, s.updated_at,
                     COUNT(t.id) as msg_count,
-                    COALESCE(MAX(t.agent_type), 'unknown') as agent,
-                    COALESCE(json_extract(MAX(t.request_json), '$.model'), '') as model,
+                    COALESCE((SELECT t2.agent_type FROM turns t2 WHERE t2.session_id = s.id
+                              ORDER BY t2.timestamp DESC LIMIT 1), 'unknown') as agent,
+                    (SELECT json_extract(t3.request_json, '$.model') FROM turns t3
+                     WHERE t3.session_id = s.id ORDER BY t3.timestamp DESC LIMIT 1) as model,
                     COALESCE(SUM(json_extract(t.response_json, '$.usage.total_tokens')), 0) as total_tokens
              FROM sessions s
              LEFT JOIN turns t ON s.id = t.session_id
-             WHERE s.title LIKE ?
+             WHERE s.title LIKE ? ESCAPE '\\'
              GROUP BY s.id
              ORDER BY s.updated_at DESC
-             LIMIT ?",
+             LIMIT ? OFFSET ?",
         )?;
 
-        let rows = stmt.query_map([&pattern, &limit.to_string()], |row| {
-            let model: String = row.get(6)?;
+        let rows = stmt.query_map(rusqlite::params![&pattern, &limit, &offset], |row| {
+            let model: Option<String> = row.get(6)?;
             Ok(Session {
                 id: row.get(0)?,
                 title: row.get(1)?,
@@ -196,7 +287,7 @@ impl Store {
                 message_count: row.get(4)?,
                 agent_type: row.get(5)?,
                 project_path: None,
-                model: if model.is_empty() { None } else { Some(model) },
+                model,
                 total_tokens: row.get(7)?,
             })
         })?;
@@ -211,7 +302,10 @@ impl Store {
 
     /// 查看单个会话详情
     pub fn get_session(&self, session_id: &str) -> Result<Option<SessionDetail>> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
 
         let session = conn.query_row(
             "SELECT id, title, project_path, created_at, updated_at FROM sessions WHERE id = ?",
@@ -239,7 +333,7 @@ impl Store {
 
         let mut stmt = conn.prepare(
             "SELECT request_json, response_json, agent_type, timestamp
-             FROM turns WHERE session_id = ? ORDER BY timestamp",
+             FROM turns WHERE session_id = ? ORDER BY timestamp LIMIT 2000",
         )?;
 
         let turn_rows = stmt.query_map([session_id], |row| {
@@ -255,14 +349,13 @@ impl Store {
                     Box::new(e),
                 )
             })?;
-            let response: LlmResponse =
-                serde_json::from_str(&resp_json).map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        1,
-                        rusqlite::types::Type::Text,
-                        Box::new(e),
-                    )
-                })?;
+            let response: LlmResponse = serde_json::from_str(&resp_json).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    1,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?;
 
             Ok(Turn {
                 id: request.id.clone(),
@@ -285,21 +378,79 @@ impl Store {
         }))
     }
 
-    /// Extract a stable session ID from the request's cwd metadata.
-    /// Public for testing purposes.
-    pub fn extract_session_id(request: &LlmRequest) -> String {
-        if let Some(cwd) = request.metadata.get("cwd") {
-            // 对 cwd 取 SHA-256 前缀，防止不同路径碰撞（如 /a/b-c vs /a/b/c）
-            let hash = {
-                use std::collections::hash_map::DefaultHasher;
-                use std::hash::{Hash, Hasher};
-                let mut h = DefaultHasher::new();
-                cwd.hash(&mut h);
-                h.finish()
-            };
-            return format!("session-{:016x}", hash);
+    /// 会话锚点：原生会话 id > 工作目录 > 仅 agent。
+    pub fn session_anchor(request: &LlmRequest) -> String {
+        const NATIVE_KEYS: [&str; 4] = [
+            "opencode.session_id",
+            "claude.session_id",
+            "codex.session_id",
+            "session.native_id",
+        ];
+        for key in NATIVE_KEYS {
+            if let Some(v) = request.metadata.get(key) {
+                if !v.trim().is_empty() {
+                    return format!("native:{}", v.trim());
+                }
+            }
         }
-        format!("session-{}", &request.id[..8.min(request.id.len())])
+        const CWD_KEYS: [&str; 4] = ["cwd", "opencode.workspace", "claude.cwd", "codex.cwd"];
+        for key in CWD_KEYS {
+            if let Some(v) = request.metadata.get(key) {
+                let normalized = v.trim().replace('\\', "/").to_lowercase();
+                let normalized = normalized.trim_end_matches('/');
+                if !normalized.is_empty() {
+                    return format!("cwd:{normalized}");
+                }
+            }
+        }
+        "agent".to_string()
+    }
+
+    /// 计算会话 id。
+    ///
+    /// - 原生会话 id 锚点：稳定，不随窗口滚动；
+    /// - cwd / agent 锚点：按 `SESSION_WINDOW_SECS` 分桶，同一分桶内归入同一会话。
+    ///   分桶使多进程（proxy/view/CLI）计算结果一致，无需共享状态。
+    pub fn session_id_at(agent: &str, request: &LlmRequest, now: i64) -> String {
+        let anchor = Self::session_anchor(request);
+        let key = format!("{agent}\u{1}{anchor}");
+        let hash = {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut h = DefaultHasher::new();
+            key.hash(&mut h);
+            h.finish()
+        };
+        if anchor.starts_with("native:") {
+            return format!("session-{hash:016x}");
+        }
+        let bucket = now.div_euclid(Self::SESSION_WINDOW_SECS);
+        format!("session-{hash:016x}-{bucket}")
+    }
+
+    /// 会话标题：首条用户消息摘要，无则回落到模型名。
+    fn session_title(request: &LlmRequest) -> String {
+        for m in &request.messages {
+            if m.role != "user" {
+                continue;
+            }
+            let text = match &m.content {
+                MessageContent::Text(t) => t.clone(),
+                MessageContent::Blocks(blocks) => blocks
+                    .iter()
+                    .filter_map(|b| b.text.clone())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            };
+            let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if !one_line.is_empty() {
+                return one_line.chars().take(48).collect();
+            }
+        }
+        request
+            .model
+            .clone()
+            .unwrap_or_else(|| "未命名会话".to_string())
     }
 
     /// Detect agent type from the request's user-agent metadata.
@@ -330,50 +481,79 @@ impl Store {
         self.data_dir.clone()
     }
 
-    pub fn compute_stats(&self, _data_dir: &Path) -> Result<serde_json::Value> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
-        let total_sessions: i64 = conn.query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))?;
+    pub fn compute_stats(&self, _data_dir: &Path) -> Result<Stats> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
+        let total_sessions: i64 =
+            conn.query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))?;
         let total_turns: i64 = conn.query_row("SELECT COUNT(*) FROM turns", [], |r| r.get(0))?;
 
         let total_tokens: i64 = conn.query_row(
             "SELECT COALESCE(SUM(
                 COALESCE(json_extract(response_json, '$.usage.total_tokens'), 0)
             ), 0) FROM turns",
-            [], |r| r.get(0)
+            [],
+            |r| r.get(0),
         )?;
 
-        // Agent 分布
-        let mut agent_stmt = conn.prepare("SELECT agent_type, COUNT(*) FROM turns GROUP BY agent_type")?;
-        let agents: Vec<(String, i64)> = agent_stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-        })?.filter_map(|r| r.ok()).collect();
+        let mut agent_stmt = conn.prepare(
+            "SELECT agent_type, COUNT(*) FROM turns GROUP BY agent_type ORDER BY 2 DESC",
+        )?;
+        let agents: Vec<CountStat> = agent_stmt
+            .query_map([], |r| {
+                Ok(CountStat {
+                    name: r.get(0)?,
+                    count: r.get(1)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
 
-        // 模型分布
-        let mut model_stmt = conn.prepare("SELECT json_extract(request_json, '$.model') as m, COUNT(*) FROM turns GROUP BY m")?;
-        let models: Vec<(String, i64)> = model_stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-        })?.filter_map(|r| r.ok()).collect();
+        let mut model_stmt = conn.prepare(
+            "SELECT COALESCE(json_extract(request_json, '$.model'), 'unknown') as m, COUNT(*)
+             FROM turns GROUP BY m ORDER BY 2 DESC",
+        )?;
+        let models: Vec<CountStat> = model_stmt
+            .query_map([], |r| {
+                Ok(CountStat {
+                    name: r.get(0)?,
+                    count: r.get(1)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
 
-        Ok(serde_json::json!({
-            "total_sessions": total_sessions,
-            "total_turns": total_turns,
-            "total_tokens": total_tokens,
-            "agents": agents,
-            "models": models,
-        }))
+        Ok(Stats {
+            total_sessions,
+            total_turns,
+            total_tokens,
+            agents,
+            models,
+        })
     }
 
     pub fn clear_all(&self) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
-        conn.execute_batch("DELETE FROM turns; DELETE FROM sessions; DELETE FROM nodes; DELETE FROM edges;")?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
+        conn.execute_batch(
+            "DELETE FROM turns; DELETE FROM sessions; DELETE FROM nodes; DELETE FROM edges;",
+        )?;
         Ok(())
     }
 
-    /// 返回全部节点（用于预填充的图谱数据）
+    /// 返回全部节点（用于图谱视图；按权重截断，防无界拉取）
     pub fn list_all_nodes(&self) -> Result<Vec<GraphNode>> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
-        let mut stmt = conn.prepare("SELECT id, label, kind, weight FROM nodes ORDER BY weight DESC")?;
-        let rows = stmt.query_map([], |r| {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
+        let mut stmt =
+            conn.prepare("SELECT id, label, kind, weight FROM nodes ORDER BY weight DESC LIMIT ?")?;
+        let rows = stmt.query_map([super::graph::GLOBAL_GRAPH_NODE_LIMIT], |r| {
             Ok(GraphNode {
                 id: r.get(0)?,
                 label: r.get(1)?,
@@ -381,14 +561,20 @@ impl Store {
                 weight: r.get(3)?,
             })
         })?;
-        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(|e| e.into())
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| e.into())
     }
 
-    /// 返回全部边
+    /// 返回全部边（按权重截断）
     pub fn list_all_edges(&self) -> Result<Vec<GraphEdge>> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
-        let mut stmt = conn.prepare("SELECT source, target, relation, weight FROM edges ORDER BY weight DESC")?;
-        let rows = stmt.query_map([], |r| {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("锁错误: {}", e))?;
+        let mut stmt = conn.prepare(
+            "SELECT source, target, relation, weight FROM edges ORDER BY weight DESC LIMIT ?",
+        )?;
+        let rows = stmt.query_map([super::graph::GLOBAL_GRAPH_EDGE_LIMIT], |r| {
             Ok(GraphEdge {
                 source: r.get(0)?,
                 target: r.get(1)?,
@@ -396,33 +582,39 @@ impl Store {
                 weight: r.get(3)?,
             })
         })?;
-        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(|e| e.into())
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| e.into())
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../frontend/src/generated/")]
 pub struct Session {
     pub id: String,
     pub title: String,
     pub created_at: String,
     pub updated_at: String,
+    #[ts(type = "number")]
     pub message_count: i64,
     pub agent_type: String,
     pub project_path: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
+    #[ts(type = "number")]
     pub total_tokens: i64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../frontend/src/generated/")]
 pub struct SessionDetail {
     pub session: Session,
     pub turns: Vec<Turn>,
     pub summary: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../frontend/src/generated/")]
 pub struct Turn {
     pub id: String,
     pub timestamp: String,
@@ -432,7 +624,8 @@ pub struct Turn {
 }
 
 /// 图谱节点
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../frontend/src/generated/")]
 pub struct GraphNode {
     pub id: String,
     pub label: String,
@@ -441,10 +634,34 @@ pub struct GraphNode {
 }
 
 /// 图谱边
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../frontend/src/generated/")]
 pub struct GraphEdge {
     pub source: String,
     pub target: String,
     pub relation: String,
     pub weight: f64,
+}
+
+/// 统计计数项（HTTP API 契约）。
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../frontend/src/generated/")]
+pub struct CountStat {
+    pub name: String,
+    #[ts(type = "number")]
+    pub count: i64,
+}
+
+/// 统计面板数据（HTTP API 契约）。
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../frontend/src/generated/")]
+pub struct Stats {
+    #[ts(type = "number")]
+    pub total_sessions: i64,
+    #[ts(type = "number")]
+    pub total_turns: i64,
+    #[ts(type = "number")]
+    pub total_tokens: i64,
+    pub agents: Vec<CountStat>,
+    pub models: Vec<CountStat>,
 }

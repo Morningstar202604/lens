@@ -101,7 +101,7 @@ export function Sidebar({ sessions, stats, selectedId, searchQuery, onSearch, on
                       {s.model}
                     </span>
                   )}
-                  <span class="text-[10px] text-text-4 ml-auto">{s.turn_count} turns</span>
+                  <span class="text-[10px] text-text-4 ml-auto">{s.message_count} 轮</span>
                 </div>
               </button>
             );

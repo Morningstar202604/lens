@@ -27,7 +27,7 @@ export function DashboardView({ stats, sessions }: Props) {
   const maxModelCount = Math.max(...stats.models.map((m) => m.count), 1);
 
   // Mock sparkline - in real app would come from time-series data
-  const tokenTrend = sessions.slice(0, 10).map((s) => s.token_count);
+  const tokenTrend = sessions.slice(0, 10).map((s) => s.total_tokens);
 
   return (
     <div class="h-full overflow-y-auto scroll-thin px-8 py-6">

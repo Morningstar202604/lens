@@ -10,3 +10,9 @@ demo_data/certs/
 *.pem
 *.key
 # CA 私钥决不能入仓 — 一旦提交攻击者可签伪证书 MITM 任意域名
+.aqg/
+bindings/
+demo_data/*.db-shm
+demo_data/*.db-wal
+demo_data/*.db.bak-v0
+demo_data/*.bak*

@@ -1,37 +1,35 @@
-# Lens 配置文件
-# 复制到 ~/.lens/config.toml 进行自定义
+# Lens 配置示例
+# 复制到 ~/.lens/config.toml（或数据目录下的 config.toml）后生效。
+# 优先级：CLI 参数 > 本文件 > 内置默认值。
 
 [proxy]
-# 代理监听地址
+# 代理监听地址（默认 127.0.0.1:9999）
 bind = "127.0.0.1:9999"
-# TLS 证书存储目录
+# TLS 证书目录（默认 certs）
 cert_dir = "certs"
-# 是否拦截 HTTPS（需要信任 CA 证书）
-intercept_https = true
+# 上游 TLS 额外信任的 CA（PEM），用于企业自签网关
+# upstream_ca = "/path/to/corp-ca.pem"
+# 跳过上游 TLS 校验（仅调试；慎用）
+# insecure_upstream = false
 
 [view]
-# 可视化面板监听地址
+# 可视化面板监听地址（默认 127.0.0.1:7317）
 bind = "127.0.0.1:7317"
-# 是否自动打开浏览器
+# 启动面板时自动打开浏览器
 open_browser = true
 
 [storage]
-# SQLite 数据库路径（默认在数据目录下）
-# database = "~/.lens/lens.db"
+# 数据目录（数据库 lens.db 位于其中）
+# data_dir = "~/.lens"
 
 [agents]
-# 各平台适配器的额外配置
+# 各 agent 是否录制（默认全部开启）
 [agents.opencode]
 enabled = true
-
 [agents.codex]
 enabled = true
-
 [agents.claude_code]
 enabled = true
-
-[ai]
-# AI 摘要功能配置
-# provider = "openai"   # openai | anthropic
-# model = "gpt-4o-mini"
-# api_key_env = "OPENAI_API_KEY"
+# 未识别 agent 的录制开关
+[agents.others]
+enabled = true

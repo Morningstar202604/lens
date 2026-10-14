@@ -2,13 +2,14 @@
 //!
 //! 两阶段实现：v1 是纯本地规则提取（关键词/文件提及/工具调用统计）；v2 后续接 LLM 做自然语言总结。
 
+use crate::engine::store::Store;
 use anyhow::Result;
 use std::collections::HashMap;
-use crate::engine::store::Store;
 
 pub fn summarize(data_dir: &std::path::Path, session_id: &str) -> Result<String> {
     let store = Store::open(data_dir)?;
-    let detail = store.get_session(session_id)?
+    let detail = store
+        .get_session(session_id)?
         .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
 
     let turns = &detail.turns;
@@ -51,45 +52,54 @@ pub fn summarize(data_dir: &std::path::Path, session_id: &str) -> Result<String>
     }
 
     // 提取文件路径提及（模式匹配）
-    let file_patterns: Vec<regex_lite::Regex> = P_PATH.iter()
+    let file_patterns: Vec<regex_lite::Regex> = P_PATH
+        .iter()
         .filter_map(|p| regex_lite::Regex::new(p).ok())
         .collect();
 
     let all_text = format!("{} {}", user_texts.join(" "), assistant_texts.join(" "));
     for line in all_text.lines() {
         for pat in &file_patterns {
-                for m in pat.find_iter(line) {
-                    let s = m.as_str().to_string();
-                    if !mentioned_files.contains(&s) && mentioned_files.len() < 8 {
-                        mentioned_files.push(s);
-                    }
+            for m in pat.find_iter(line) {
+                let s = m.as_str().to_string();
+                if !mentioned_files.contains(&s) && mentioned_files.len() < 8 {
+                    mentioned_files.push(s);
                 }
+            }
         }
     }
 
     // 检测常见编程话题
     for (keyword, topic) in P_TOPICS {
         if all_text.to_lowercase().contains(keyword)
-            && !mentioned_topics.contains(&topic.to_string()) {
-                mentioned_topics.push(topic.to_string());
-            }
+            && !mentioned_topics.contains(&topic.to_string())
+        {
+            mentioned_topics.push(topic.to_string());
+        }
     }
 
     // 构建摘要
     let mut parts: Vec<String> = Vec::new();
 
     // 1. 轮次 + 模型 + 工具
-    let models: Vec<String> = turns.iter()
+    let models: Vec<String> = turns
+        .iter()
         .filter_map(|t| t.request.model.clone())
         .collect::<std::collections::HashSet<_>>()
-        .into_iter().collect();
-    parts.push(format!("共 {} 轮对话，使用模型: {}", turns.len(), models.join(", ")));
+        .into_iter()
+        .collect();
+    parts.push(format!(
+        "共 {} 轮对话，使用模型: {}",
+        turns.len(),
+        models.join(", ")
+    ));
 
     // 2. 使用工具
     if !tool_counts.is_empty() {
         let mut tools_sorted: Vec<_> = tool_counts.iter().collect();
         tools_sorted.sort_by(|a, b| b.1.cmp(a.1));
-        let tool_summary: Vec<String> = tools_sorted.iter()
+        let tool_summary: Vec<String> = tools_sorted
+            .iter()
             .map(|(name, count)| format!("{}({}次)", name, count))
             .collect();
         parts.push(format!("调用工具: {}", tool_summary.join("、")));
@@ -119,9 +129,11 @@ pub fn summarize(data_dir: &std::path::Path, session_id: &str) -> Result<String>
 fn flatten_content(content: &crate::proxy::parser::MessageContent) -> String {
     match content {
         crate::proxy::parser::MessageContent::Text(s) => s.clone(),
-        crate::proxy::parser::MessageContent::Blocks(blocks) => {
-            blocks.iter().filter_map(|b| b.text.clone()).collect::<Vec<_>>().join(" ")
-        }
+        crate::proxy::parser::MessageContent::Blocks(blocks) => blocks
+            .iter()
+            .filter_map(|b| b.text.clone())
+            .collect::<Vec<_>>()
+            .join(" "),
     }
 }
 

@@ -5,11 +5,10 @@
   "build": {
     "beforeDevCommand": "",
     "devUrl": "http://localhost:7317",
-    "frontendDist": "../web",
-    "withGlobalTauri": true
+    "frontendDist": "../web"
   },
   "app": {
-    "title": "Lens · AI 编程代理透镜",
+    "withGlobalTauri": false,
     "windows": [
       {
         "title": "Lens · AI 编程代理透镜",

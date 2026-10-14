@@ -10,6 +10,7 @@ pub struct ClaudeContext {
     pub system_blocks: Option<Vec<SystemBlock>>,
     pub betas: Option<Vec<String>>,
     pub container_id: Option<String>,
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -19,7 +20,32 @@ pub struct SystemBlock {
     pub text: Option<String>,
 }
 
-pub fn extract_context(body: &Value, headers: &std::collections::HashMap<String, String>) -> ClaudeContext {
+/// 从 system 文本中提取工作目录。
+///
+/// Claude Code 的 env 块内含 `Working directory: <path>` 行；
+/// 未命中时返回 None（调用方回落到时间窗归组）。
+fn extract_cwd(system: &Option<Vec<SystemBlock>>) -> Option<String> {
+    let blocks = system.as_ref()?;
+    for block in blocks {
+        let Some(text) = block.text.as_deref() else {
+            continue;
+        };
+        for line in text.lines() {
+            if let Some(rest) = line.trim().strip_prefix("Working directory:") {
+                let value = rest.trim();
+                if !value.is_empty() {
+                    return Some(value.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+pub fn extract_context(
+    body: &Value,
+    headers: &std::collections::HashMap<String, String>,
+) -> ClaudeContext {
     let system = body["system"].as_array().map(|blocks| {
         blocks
             .iter()
@@ -33,17 +59,25 @@ pub fn extract_context(body: &Value, headers: &std::collections::HashMap<String,
             .collect()
     });
 
-    let betas = body["betas"].as_array().map(|arr| {
-        arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
-    }).or_else(|| {
-        headers
-            .get("x-anthropic-beta")
-            .map(|b| b.split(',').map(|s| s.trim().to_string()).collect())
-    });
+    let betas = body["betas"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .or_else(|| {
+            headers
+                .get("x-anthropic-beta")
+                .map(|b| b.split(',').map(|s| s.trim().to_string()).collect())
+        });
+
+    let cwd = extract_cwd(&system);
 
     ClaudeContext {
         system_blocks: system,
         betas,
         container_id: headers.get("x-anthropic-container-id").cloned(),
+        cwd,
     }
 }

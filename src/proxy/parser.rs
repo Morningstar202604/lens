@@ -5,10 +5,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use ts_rs::TS;
 use uuid::Uuid;
 
 /// 一条 LLM 请求记录
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../frontend/src/generated/")]
 pub struct LlmRequest {
     pub id: String,
     pub timestamp: String,
@@ -22,7 +24,8 @@ pub struct LlmRequest {
 }
 
 /// 一条 LLM 响应记录
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../frontend/src/generated/")]
 pub struct LlmResponse {
     pub request_id: String,
     pub timestamp: String,
@@ -31,53 +34,63 @@ pub struct LlmResponse {
     pub tool_calls: Option<Vec<ToolCall>>,
     pub usage: Option<TokenUsage>,
     pub finish_reason: Option<String>,
+    #[ts(type = "unknown")]
     pub raw: Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../frontend/src/generated/")]
 pub enum Provider {
     OpenAI,
     Anthropic,
     Unknown(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../frontend/src/generated/")]
 pub struct Message {
     pub role: String,
     pub content: MessageContent,
     pub name: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../frontend/src/generated/")]
 #[serde(untagged)]
 pub enum MessageContent {
     Text(String),
     Blocks(Vec<ContentBlock>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../frontend/src/generated/")]
 pub struct ContentBlock {
     #[serde(rename = "type")]
     pub block_type: String,
     pub text: Option<String>,
+    #[ts(type = "unknown")]
     pub image_url: Option<Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../frontend/src/generated/")]
 pub struct ToolDef {
     #[serde(rename = "type")]
     pub tool_type: String,
     pub function: Option<ToolFunction>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../frontend/src/generated/")]
 pub struct ToolFunction {
     pub name: String,
     pub description: Option<String>,
+    #[ts(type = "unknown")]
     pub parameters: Option<Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../frontend/src/generated/")]
 pub struct ToolCall {
     pub id: String,
     #[serde(rename = "type")]
@@ -85,16 +98,22 @@ pub struct ToolCall {
     pub function: ToolCallFunction,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../frontend/src/generated/")]
 pub struct ToolCallFunction {
     pub name: String,
+    #[ts(type = "unknown")]
     pub arguments: Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../frontend/src/generated/")]
 pub struct TokenUsage {
+    #[ts(type = "number")]
     pub prompt_tokens: Option<i64>,
+    #[ts(type = "number")]
     pub completion_tokens: Option<i64>,
+    #[ts(type = "number")]
     pub total_tokens: Option<i64>,
 }
 
@@ -158,10 +177,58 @@ impl RequestParser {
 
     fn extract_messages(json: &Value, provider: &Provider) -> Option<Vec<Message>> {
         match provider {
-            Provider::OpenAI => Self::parse_openai_messages(json),
+            Provider::OpenAI => {
+                Self::parse_openai_messages(json).or_else(|| Self::parse_responses_input(json))
+            }
             Provider::Anthropic => Self::parse_anthropic_messages(json),
             Provider::Unknown(_) => None,
         }
+    }
+
+    /// Responses API（Codex 等）请求：`input` 数组（无 `messages` 键）。
+    ///
+    /// role 消息（user/assistant/developer/system）归一化为 Message；
+    /// `function_call*` 项不进入 messages（工具定义已由 `tools` 字段单独捕获）。
+    fn parse_responses_input(json: &Value) -> Option<Vec<Message>> {
+        let input = json["input"].as_array()?;
+        let mut result = Vec::new();
+
+        for item in input {
+            if item["type"]
+                .as_str()
+                .is_some_and(|t| t.starts_with("function_call"))
+            {
+                continue;
+            }
+            let Some(role) = item["role"].as_str() else {
+                continue;
+            };
+            let content = if let Some(text) = item["content"].as_str() {
+                MessageContent::Text(text.to_string())
+            } else if let Some(blocks) = item["content"].as_array() {
+                let cblocks: Vec<ContentBlock> = blocks
+                    .iter()
+                    .filter_map(|b| {
+                        let text = b["text"].as_str()?;
+                        Some(ContentBlock {
+                            block_type: b["type"].as_str().unwrap_or("text").to_string(),
+                            text: Some(text.to_string()),
+                            image_url: None,
+                        })
+                    })
+                    .collect();
+                MessageContent::Blocks(cblocks)
+            } else {
+                continue;
+            };
+            result.push(Message {
+                role: role.to_string(),
+                content,
+                name: None,
+            });
+        }
+
+        Some(result)
     }
 
     fn parse_openai_messages(json: &Value) -> Option<Vec<Message>> {
@@ -210,25 +277,23 @@ impl RequestParser {
             } else if let Some(blocks) = msg["content"].as_array() {
                 let cblocks: Vec<ContentBlock> = blocks
                     .iter()
-                    .filter_map(|b| {
-                        match b["type"].as_str()? {
-                            "text" => Some(ContentBlock {
-                                block_type: "text".to_string(),
-                                text: b["text"].as_str().map(String::from),
-                                image_url: None,
-                            }),
-                            "tool_use" => Some(ContentBlock {
-                                block_type: "tool_use".to_string(),
-                                text: b["name"].as_str().map(String::from),
-                                image_url: None,
-                            }),
-                            "tool_result" => Some(ContentBlock {
-                                block_type: "tool_result".to_string(),
-                                text: b["content"].as_str().map(String::from),
-                                image_url: None,
-                            }),
-                            _ => None,
-                        }
+                    .filter_map(|b| match b["type"].as_str()? {
+                        "text" => Some(ContentBlock {
+                            block_type: "text".to_string(),
+                            text: b["text"].as_str().map(String::from),
+                            image_url: None,
+                        }),
+                        "tool_use" => Some(ContentBlock {
+                            block_type: "tool_use".to_string(),
+                            text: b["name"].as_str().map(String::from),
+                            image_url: None,
+                        }),
+                        "tool_result" => Some(ContentBlock {
+                            block_type: "tool_result".to_string(),
+                            text: b["content"].as_str().map(String::from),
+                            image_url: None,
+                        }),
+                        _ => None,
                     })
                     .collect();
                 MessageContent::Blocks(cblocks)
@@ -294,10 +359,18 @@ impl ResponseParser {
         request_id: &str,
     ) -> Option<LlmResponse> {
         let json: Value = serde_json::from_slice(body).ok()?;
+        Self::parse_response_value(provider, &json, request_id)
+    }
 
+    /// 从已解析的 JSON 构建响应（SSE 聚合与完整对象回溯共用）。
+    pub fn parse_response_value(
+        provider: &Provider,
+        json: &Value,
+        request_id: &str,
+    ) -> Option<LlmResponse> {
         match provider {
-            Provider::OpenAI => Self::parse_openai_response(&json, request_id),
-            Provider::Anthropic => Self::parse_anthropic_response(&json, request_id),
+            Provider::OpenAI => Self::parse_openai_response(json, request_id),
+            Provider::Anthropic => Self::parse_anthropic_response(json, request_id),
             Provider::Unknown(_) => None,
         }
     }

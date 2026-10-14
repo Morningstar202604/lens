@@ -8,13 +8,6 @@ export default defineConfig({
   build: {
     outDir: '../web',
     emptyOutDir: true,
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          d3: ['d3-force'],
-        },
-      },
-    },
   },
   server: {
     port: 5173,

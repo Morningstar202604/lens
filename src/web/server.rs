@@ -8,7 +8,6 @@ use axum::response::{Html, IntoResponse, Json};
 use axum::routing::get;
 use axum::Router;
 use serde::Deserialize;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
@@ -17,7 +16,7 @@ use tracing::info;
 
 use crate::engine::Store;
 
-pub async fn serve(bind: &str, data_dir: &PathBuf) -> Result<()> {
+pub async fn serve(bind: &str, data_dir: &std::path::Path, open_browser: bool) -> Result<()> {
     let addr: std::net::SocketAddr = bind.parse()?;
     let web_dir = std::env::current_dir()?.join("web");
     let store = Arc::new(Store::open(data_dir)?);
@@ -35,12 +34,7 @@ pub async fn serve(bind: &str, data_dir: &PathBuf) -> Result<()> {
         .fallback(index_handler)
         .layer(
             CorsLayer::new()
-                .allow_origin(
-                    ["http://127.0.0.1:7317", "http://localhost:7317"]
-                        .iter()
-                        .filter_map(|s| s.parse().ok())
-                        .collect::<Vec<_>>(),
-                )
+                .allow_origin(cors_origins(addr.port()))
                 .allow_methods([axum::http::Method::GET])
                 .allow_headers([axum::http::header::CONTENT_TYPE]),
         )
@@ -49,8 +43,12 @@ pub async fn serve(bind: &str, data_dir: &PathBuf) -> Result<()> {
     let listener = TcpListener::bind(&addr).await?;
     info!("Lens dashboard: http://{}", addr);
 
-    if let Err(e) = _open_browser(&format!("http://{}", addr)) {
-        info!("Could not auto-open browser: {}", e);
+    if open_browser {
+        if let Err(e) = _open_browser(&format!("http://{}", addr)) {
+            info!("Could not auto-open browser: {}", e);
+            info!("Open manually: http://{}", addr);
+        }
+    } else {
         info!("Open manually: http://{}", addr);
     }
 
@@ -77,24 +75,44 @@ async fn index_handler() -> Result<Html<String>, AppError> {
     Err(anyhow::anyhow!("index.html not found: checked {:?}", candidates).into())
 }
 
-#[derive(Debug, Deserialize)]
-pub struct SearchQuery {
-    pub q: Option<String>,
+/// 面板自身的来源白名单：与监听端口一致（127.0.0.1 与 localhost 两种写法）。
+pub(crate) fn cors_origins(port: u16) -> Vec<axum::http::HeaderValue> {
+    [
+        format!("http://127.0.0.1:{port}"),
+        format!("http://localhost:{port}"),
+    ]
+    .iter()
+    .filter_map(|s| s.parse().ok())
+    .collect()
 }
+
+#[derive(Debug, Deserialize)]
+pub struct ListQuery {
+    pub q: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+const MAX_PAGE_SIZE: usize = 500;
 
 async fn list_sessions(
     State(store): State<Arc<Store>>,
+    Query(params): Query<ListQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let sessions = blocking(move || store.list_sessions(100)).await?;
+    let limit = params.limit.unwrap_or(100).min(MAX_PAGE_SIZE);
+    let offset = params.offset.unwrap_or(0);
+    let sessions = blocking(move || store.list_sessions(limit, offset)).await?;
     Ok(Json(serde_json::json!({ "sessions": sessions })))
 }
 
 async fn search_sessions(
     State(store): State<Arc<Store>>,
-    Query(params): Query<SearchQuery>,
+    Query(params): Query<ListQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let q = params.q.unwrap_or_default();
-    let sessions = blocking(move || store.search_sessions(&q, 50)).await?;
+    let limit = params.limit.unwrap_or(50).min(MAX_PAGE_SIZE);
+    let offset = params.offset.unwrap_or(0);
+    let sessions = blocking(move || store.search_sessions(&q, limit, offset)).await?;
     Ok(Json(serde_json::json!({ "sessions": sessions })))
 }
 
@@ -138,14 +156,13 @@ async fn get_session_summary(
     if exists.is_none() {
         return Ok(Json(serde_json::json!({ "error": "会话不存在" })));
     }
-    let summary =
-        blocking(move || crate::engine::summary::summarize(&data_dir, &id)).await?;
+    let summary = blocking(move || crate::engine::summary::summarize(&data_dir, &id)).await?;
     Ok(Json(serde_json::json!({ "summary": summary })))
 }
 
 async fn get_stats(
     State(store): State<Arc<Store>>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Json<crate::engine::store::Stats>, AppError> {
     let data_dir = store.data_dir();
     let stats = blocking(move || store.compute_stats(&data_dir)).await?;
     Ok(Json(stats))
@@ -153,12 +170,12 @@ async fn get_stats(
 
 async fn novel_demo_handler() -> Result<Html<String>, AppError> {
     let mut candidates = vec![std::env::current_dir()
-        .map(|d| d.join("web/novel_graph.html"))
+        .map(|d| d.join("demo/novel_graph.html"))
         .unwrap_or_default()];
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
-            candidates.push(exe_dir.join("../web/novel_graph.html"));
-            candidates.push(exe_dir.join("web/novel_graph.html"));
+            candidates.push(exe_dir.join("../demo/novel_graph.html"));
+            candidates.push(exe_dir.join("demo/novel_graph.html"));
         }
     }
     for p in &candidates {
@@ -219,4 +236,21 @@ fn _open_browser(url: &str) -> Result<()> {
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn _open_browser(_url: &str) -> Result<()> {
     anyhow::bail!("unsupported os")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cors_origins;
+
+    #[test]
+    fn cors_origins_follow_listen_port() {
+        let origins = cors_origins(7399);
+        let values: Vec<String> = origins
+            .iter()
+            .map(|v| v.to_str().unwrap_or_default().to_string())
+            .collect();
+        assert!(values.contains(&"http://127.0.0.1:7399".to_string()));
+        assert!(values.contains(&"http://localhost:7399".to_string()));
+        assert_eq!(values.len(), 2);
+    }
 }

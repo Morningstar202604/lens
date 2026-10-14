@@ -98,6 +98,9 @@ def main():
 
     conn = sqlite3.connect(db_path)
     create_schema(conn)
+    # 幂等：重复执行不累积历史演示数据
+    conn.execute("DELETE FROM turns")
+    conn.execute("DELETE FROM sessions")
 
     base_time = datetime(2026, 10, 6, 14, 0, 0)
 

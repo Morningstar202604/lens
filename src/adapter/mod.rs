@@ -17,6 +17,11 @@ pub enum AgentKind {
     ClaudeCode,
     KimiCode,
     Trae,
+    Qoder,
+    KiloCode,
+    OpenClaw,
+    GeminiCli,
+    Cursor,
     Unknown(String),
 }
 
@@ -31,14 +36,29 @@ pub fn identify(headers: &std::collections::HashMap<String, String>, body: &[u8]
         if ua_lower.contains("codex") {
             return AgentKind::Codex;
         }
-        if ua_lower.contains("claude") {
-            return AgentKind::ClaudeCode;
+        if ua_lower.contains("kimi") {
+            return AgentKind::KimiCode;
         }
         if ua_lower.contains("trae") {
             return AgentKind::Trae;
         }
-        if ua_lower.contains("kimi") {
-            return AgentKind::KimiCode;
+        if ua_lower.contains("qoder") {
+            return AgentKind::Qoder;
+        }
+        if ua_lower.contains("kilo") {
+            return AgentKind::KiloCode;
+        }
+        if ua_lower.contains("openclaw") {
+            return AgentKind::OpenClaw;
+        }
+        if ua_lower.contains("gemini") {
+            return AgentKind::GeminiCli;
+        }
+        if ua_lower.contains("cursor") {
+            return AgentKind::Cursor;
+        }
+        if ua_lower.contains("claude") {
+            return AgentKind::ClaudeCode;
         }
     }
 
@@ -49,7 +69,11 @@ pub fn identify(headers: &std::collections::HashMap<String, String>, body: &[u8]
             return AgentKind::ClaudeCode;
         }
         // Codex Responses API：有 input 字段
-        if json["input"].is_array() && json["model"].as_str().is_some_and(|m| m.contains("o1") || m.contains("gpt")) {
+        if json["input"].is_array()
+            && json["model"]
+                .as_str()
+                .is_some_and(|m| m.contains("o1") || m.contains("gpt"))
+        {
             return AgentKind::Codex;
         }
     }
@@ -93,6 +117,9 @@ pub fn extract_context(
             }
             if let Some(container) = ctx.container_id {
                 result.push(("claude.container_id".into(), container));
+            }
+            if let Some(cwd) = ctx.cwd {
+                result.push(("claude.cwd".into(), cwd));
             }
             let num_blocks = ctx.system_blocks.as_ref().map(|b| b.len()).unwrap_or(0);
             result.push(("claude.system_blocks".into(), num_blocks.to_string()));

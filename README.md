@@ -1,220 +1,143 @@
 # Lens · 透镜
 
-**[English](#english) | [中文](#中文)**
+[English](#english) | **中文**
 
-<p align="center">
-  <strong>Turn AI coding agent dialogues into interactive panoramas.</strong><br/>
-  <sub>将 AI 编程代理的对话流变为可视化全景。</sub>
-</p>
+**把 AI 编程代理的对话变成可回溯的本地资产。** 两条数据源,同构入库:
 
-<p align="center">
-  <a href="https://gitcode.com/badhope/lens"><img src="https://img.shields.io/badge/GitCode-lens-blue" alt="GitCode"></a>
-  <a href="https://gitee.com/badhope/lens"><img src="https://img.shields.io/badge/Gitee-lens-red" alt="Gitee"></a>
-  <a href="https://github.com/X33834/lens"><img src="https://img.shields.io/badge/GitHub-X33834-black" alt="GitHub"></a>
-  <a href="https://github.com/Morningstar202604/lens"><img src="https://img.shields.io/badge/GitHub-Morningstar202604-black" alt="GitHub"></a>
-  <img src="https://img.shields.io/badge/Rust-1.74+-orange" alt="Rust">
-  <img src="https://img.shields.io/badge/Preact-10-green" alt="Preact">
-  <img src="https://img.shields.io/badge/Tauri-v2-cyan" alt="Tauri">
-</p>
+1. **代理录制** — 本地透明 HTTP/HTTPS 代理,拦截 OpenCode / Codex / Claude Code 与 LLM API 的通信(含 SSE 流式),实时入库;
+2. **日志导入** — 直接读取 Claude Code 的本地会话日志(`~/.claude/projects/**/*.jsonl`),零配置、零信任安装。
 
----
+入库后提供:会话时间线、Token/模型统计、按会话隔离的知识图谱(文件/函数/话题),以及 Tauri 桌面壳(实验性)。
 
-<span id="english"></span>
+## 快速开始
+
+```bash
+# 构建(仅需 Rust;Windows 上构建桌面壳另需 Windows SDK)
+cargo build --release
+
+# 方式 A(零摩擦):导入既有 Claude Code 日志
+./target/release/lens import                     # 默认 ~/.claude/projects
+./target/release/lens import --path /path/to/logs
+
+# 方式 B(实时录制):启动代理 + 面板
+./target/release/lens start                      # 代理 :9999 + 面板 :7317
+# 在你的 agent 终端中:
+export HTTP_PROXY=http://127.0.0.1:9999
+export HTTPS_PROXY=http://127.0.0.1:9999
+```
+
+面板地址 `http://127.0.0.1:7317`,默认自动打开浏览器。
+
+### 信任 MITM 证书(仅代理模式需要)
+
+首次运行 `lens proxy`/`start` 时会在 `certs/` 生成 CA(`ca.crt` + `ca.key`,私钥权限 0600):
+
+```bash
+# macOS
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain certs/ca.crt
+# Linux (Debian/Ubuntu)
+sudo cp certs/ca.crt /usr/local/share/ca-certificates/lens.crt && sudo update-ca-certificates
+# Windows(普通用户级,无需管理员)
+certutil -addstore -user Root certs\ca.crt
+```
+
+注意:CA 私钥只在本机 `certs/` 内,**不要**提交到任何仓库,也不要安装来源不明的 CA。
+
+## 配置
+
+复制 `config/lens.toml` 到 `~/.lens/config.toml`(或数据目录下 `config.toml`),或 `--config <path>` 显式指定。
+优先级:**CLI 参数 > 配置文件 > 内置默认值**。
+
+```toml
+[proxy]
+bind = "127.0.0.1:9999"
+cert_dir = "certs"
+# upstream_ca = "/path/to/corp-ca.pem"   # 企业自签网关
+# insecure_upstream = false              # 跳过上游校验(仅调试)
+
+[view]
+bind = "127.0.0.1:7317"
+open_browser = true
+
+[storage]
+# data_dir = "~/.lens"
+
+[agents.codex]
+enabled = true                            # 按 agent 关闭录制
+```
+
+## 命令
+
+| 命令 | 说明 |
+|---|---|
+| `lens proxy` | 只启动代理 |
+| `lens view` | 只启动可视化面板 |
+| `lens start` | 代理 + 面板 |
+| `lens import [--source claude\|opencode] [--path P] [--limit N]` | 导入会话日志:claude=JSONL,opencode=本地 SQLite 库;幂等,重复导入自动跳过 |
+| `lens list [--limit N]` / `lens show <id>` | 命令行查看会话 |
+| `lens init` / `lens clear` | 初始化数据目录 / 清空数据 |
+
+## 能力边界(实测口径)
+
+- **录制**:HTTP 与 HTTPS(CONNECT + 动态证书)完整转发;SSE 流式响应边转发边聚合后入库(OpenAI Chat Completions / Responses API、Anthropic Messages);非流式 JSON 响应直接入库。
+- **识别**:OpenCode / Codex / Claude Code(按 UA + 请求体特征),其余按启发式归类为 unknown。
+- **会话归组**:原生会话 id → workspace/cwd → 30 分钟时间窗(分桶,多进程一致)。
+- **导入**:Claude Code JSONL(assistant 条目 uuid 幂等)、OpenCode 本地库(message.id 幂等,tool 输出截断保留);Codex CLI 导入暂缓(本机无样本可校准,不猜实现)。
+- **不支持**:非 LLM 流量不解析;HTTP 请求体为 chunked 编码(罕见)不完整转发;Codex 本地日志导入暂未实现。
+
+## 演示数据
+
+```bash
+python seed_demo_data.py                      # 合成 3 个演示会话 → demo_data/lens.db
+cargo run -- view --data-dir demo_data        # 查看
+
+python seed_novel_graph.py                    # 无职转生知识图谱演示 → demo_data/novel/lens.db
+cargo run -- view --data-dir demo_data/novel  # 打开 /demo/novel
+```
+
+演示数据与真实录制互不污染(独立数据库;图谱按会话隔离)。
+
+## 架构
+
+```
+src/
+├── proxy/
+│   ├── server.rs       # 监听分发(整头读取,零丢字节)
+│   ├── connect.rs      # CONNECT + MITM + 上游 TLS 策略
+│   ├── http_handler.rs # 明文 HTTP 转发
+│   ├── httpbuf.rs      # 带残余缓冲的 HTTP 读取器(chunked 框架安全)
+│   ├── sse.rs          # SSE 流式聚合器(chat/Responses/anthropic)
+│   ├── io.rs / parser.rs / request.rs / cert.rs
+├── engine/
+│   ├── store.rs        # SQLite(schema v1,迁移带备份)
+│   ├── graph.rs        # 会话隔离的知识图谱
+│   ├── summary.rs / session.rs
+├── import.rs           # Claude Code JSONL 导入
+├── config.rs           # TOML 配置(CLI > 文件 > 默认)
+└── web/                # axum API + 静态面板
+frontend/               # Preact + Vite(类型由 ts-rs 从 Rust 生成)
+```
+
+接口契约的唯一真相是 Rust 结构体:`cargo test` 会把 TS 类型导出到 `frontend/src/generated/`(CI 校验无漂移)。
+
+## 开发
+
+```bash
+cargo test -p lens          # 单测 + 场景 + 代理 e2e(mock 上游,含 TLS/SSE)
+cargo clippy -p lens --all-targets -- -D warnings
+cd frontend && npm ci && npx tsc --noEmit && npm run build   # 产物输出到 web/(已入库,CI 校验新鲜度)
+```
+
+CI 见 `.github/workflows/ci.yml`(Linux/Windows 双平台)。
 
 ## English
 
-**Lens** is a local-first, transparent HTTP proxy that records the complete communication between AI coding agents (OpenCode, Codex, Claude Code) and LLM APIs — then turns those dialogues into interactive visualizations.
+Lens turns AI coding-agent conversations into a searchable local asset. Two sources feed one store: a local
+transparent HTTP/HTTPS proxy that records live traffic from OpenCode / Codex / Claude Code (SSE streaming
+supported, aggregated before persisting), and an importer for Claude Code JSONL logs (zero-config, idempotent).
+It then serves a session timeline, token/model stats, and a per-session knowledge graph, plus an experimental
+Tauri desktop shell. API types are generated from the Rust structs via ts-rs.
 
-It uses **your agent's own API keys**. Lens just passively watches, records, and visualizes. No configuration changes needed in your agent.
-
-<a href="docs/screenshots/dashboard.png"><img src="docs/screenshots/dashboard.png" width="800" alt="Dashboard"/></a>
-
-### How It Works
-
-```
-┌─────────────┐     HTTP/HTTPS      ┌──────────┐      forward       ┌────────────┐
-│ AI Agent    │ ──────────────────▶ │  Lens    │ ────────────────▶  │ LLM API    │
-│ (Codex,     │ ◀────────────────── │  Proxy   │ ◀────────────────  │ (OpenAI,   │
-│  Claude...) │    (with MITM TLS)  │  :9999   │                    │  Anthropic)│
-└─────────────┘                     └────┬─────┘                    └────────────┘
-                                         │
-                                         ▼ record
-                                   ┌──────────┐      ┌──────────┐
-                                   │  SQLite  │ ───▶ │  Web UI  │
-                                   │  lens.db │      │  /api/*  │
-                                   └──────────┘      └──────────┘
-```
-
-### Features
-
-- **Zero-config agent integration** — Set one environment variable, agent works unchanged
-- **Multi-agent recognition** — Auto-detects OpenCode, Codex, Claude Code (heuristic detection for others)
-- **HTTPS interception** — Full TLS MITM with dynamic certificate signing
-- **Conversation Timeline** — Full message history with expandable tool calls
-- **Stats Dashboard** — Token usage, agent distribution, model comparison
-- **Knowledge Graph** — Entity extraction (files, functions, topics) with force-directed layout
-- **Cross-platform** — macOS, Linux, Windows (Tauri v2 desktop)
-
-### Quick Start
-
-```bash
-# Build
-cargo build --release
-
-# Start proxy (in one terminal)
-./target/release/lens proxy
-
-# Start web viewer (in another terminal)
-./target/release/lens view
-
-# In your agent's terminal:
-export HTTP_PROXY=http://127.0.0.1:9999
-export HTTPS_PROXY=http://127.0.0.1:9999
-# ... use your agent as normal
-```
-
-### Platform Proxy Setup
-
-**VS Code** (`settings.json`):
-```json
-{
-  "http.proxy": "http://127.0.0.1:9999"
-}
-```
-
-**Cursor** (Settings → Network → Proxy):
-```
-http://127.0.0.1:9999
-```
-
-**Terminal agents** (Codex, Claude Code, etc.):
-```bash
-export HTTP_PROXY=http://127.0.0.1:9999
-export HTTPS_PROXY=http://127.0.0.1:9999
-```
-
-### Screenshots
-
-| Dashboard | Timeline | Graph |
-|-----------|----------|-------|
-| <a href="docs/screenshots/dashboard.png"><img src="docs/screenshots/dashboard.png" width="250"/></a> | <a href="docs/screenshots/timeline.png"><img src="docs/screenshots/timeline.png" width="250"/></a> | <a href="docs/screenshots/graph.png"><img src="docs/screenshots/graph.png" width="250"/></a> |
-
-### Architecture
-
-```
-lens/
-├── src/
-│   ├── proxy/          # HTTP/HTTPS transparent proxy
-│   │   ├── server.rs   # Entry & dispatch
-│   │   ├── connect.rs  # HTTPS CONNECT + MITM
-│   │   ├── http_handler.rs # HTTP proxy handler
-│   │   ├── io.rs       # I/O helpers
-│   │   ├── cert.rs     # TLS cert management
-│   │   ├── parser.rs   # LLM request/response parser
-│   │   └── request.rs  # Agent detection + adapter context extraction
-│   ├── engine/
-│   │   ├── store.rs    # SQLite storage
-│   │   ├── graph.rs    # Knowledge graph builder
-│   │   └── summary.rs  # Conversation summarization
-│   ├── adapter/        # Agent type detection
-│   └── web/            # Axum REST API server
-├── frontend/           # Preact + Vite + Tailwind
-│   ├── src/components/ # UI components
-│   └── src/lib/        # API client, types
-└── web/                # Built frontend assets
-```
-
-### License
-
-MIT
-
----
-
-<span id="中文"></span>
-
-## 中文
-
-**Lens（透镜）** 是一个本地优先的透明 HTTP 代理，完整录制 AI 编程代理（OpenCode、Codex、Claude Code）与 LLM API 之间的通信，并将其转化为交互式可视化。
-
-它使用 **你自己的 API 密钥**。Lens 只是被动地观察、记录和可视化，无需修改你的 agent 配置。
-
-### 工作原理
-
-Lens 作为本地代理运行在 `127.0.0.1:9999`，拦截 HTTP/HTTPS 流量（包括 TLS MITM），解析 LLM 对话结构，存入 SQLite 数据库，并通过 Web 面板提供可视化。
-
-### 特性
-
-- **零配置集成** — 设置一个环境变量，agent 无需改动
-- **多代理识别** — 自动识别 OpenCode、Codex、Claude Code（其他代理通过启发式检测）
-- **HTTPS 拦截** — 完整的 TLS MITM + 动态证书签发
-- **对话时间线** — 完整消息历史，可折叠的工具调用
-- **统计面板** — Token 用量、代理分布、模型对比
-- **知识图谱** — 自动提取实体（文件、函数、话题），力导向布局
-- **跨平台** — macOS、Linux、Windows（基于 Tauri v2）
-
-### 快速开始
-
-```bash
-# 构建
-cargo build --release
-
-# 启动代理（第一个终端）
-./target/release/lens proxy
-
-# 启动可视化面板（第二个终端）
-./target/release/lens view
-
-# 在你的 agent 终端中：
-export HTTP_PROXY=http://127.0.0.1:9999
-export HTTPS_PROXY=http://127.0.0.1:9999
-# ... 正常使用你的 agent
-```
-
-### 各平台代理设置
-
-**VS Code**（`settings.json`）：
-```json
-{
-  "http.proxy": "http://127.0.0.1:9999"
-}
-```
-
-**Cursor**（设置 → 网络 → 代理）：
-```
-http://127.0.0.1:9999
-```
-
-**终端 agent**（Codex、Claude Code 等）：
-```bash
-export HTTP_PROXY=http://127.0.0.1:9999
-export HTTPS_PROXY=http://127.0.0.1:9999
-```
-
-### 项目结构
-
-```
-lens/
-├── src/
-│   ├── proxy/          # HTTP/HTTPS 透明代理
-│   │   ├── server.rs   # 入口 & 分发
-│   │   ├── connect.rs  # HTTPS CONNECT + MITM
-│   │   ├── http_handler.rs # HTTP 代理处理
-│   │   ├── io.rs       # I/O 辅助
-│   │   ├── cert.rs     # TLS 证书管理
-│   │   ├── parser.rs   # LLM 请求/响应解析
-│   │   └── request.rs  # Agent 检测 + 适配器上下文提取
-│   ├── engine/
-│   │   ├── store.rs    # SQLite 存储
-│   │   ├── graph.rs    # 知识图谱构建
-│   │   └── summary.rs  # 对话总结
-│   ├── adapter/        # Agent 类型检测
-│   └── web/            # Axum REST API 服务器
-├── frontend/           # Preact + Vite + Tailwind
-│   ├── src/components/ # UI 组件
-│   └── src/lib/        # API 客户端、类型
-└── web/                # 构建后的前端资源
-```
-
-### 许可证
+## License
 
 MIT

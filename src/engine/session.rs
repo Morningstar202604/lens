@@ -26,12 +26,16 @@ pub fn resolve_data_dir(cli_override: Option<&str>) -> Result<std::path::PathBuf
 }
 
 /// 清除所有数据
-pub fn clear_data(_data_dir: &Path) -> Result<()> {
-    // 删除数据库文件即可
-    let db_path = _data_dir.join("lens.db");
-    if db_path.exists() {
-        std::fs::remove_file(&db_path)?;
+pub fn clear_data(data_dir: &Path) -> Result<()> {
+    // 数据库本体与 WAL/SHM 伴随文件一并删除
+    let db_path = data_dir.join("lens.db");
+    for suffix in ["", "-wal", "-shm"] {
+        let path = data_dir.join(format!("lens.db{suffix}"));
+        if path.exists() {
+            std::fs::remove_file(&path)?;
+        }
     }
+    let _ = db_path;
     Ok(())
 }
 
@@ -43,14 +47,16 @@ pub fn init_data_dir(data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-
 /// 列出所有会话（CLI 交互）
 pub fn list_sessions(data_dir: &Path, limit: usize) -> Result<()> {
     let store = Store::open(data_dir)?;
-    let sessions = store.list_sessions(limit)?;
+    let sessions = store.list_sessions(limit, 0)?;
 
     if sessions.is_empty() {
-        println!("{}", style("尚无记录的会话。先运行 `lens proxy` 开始拦截。").dim());
+        println!(
+            "{}",
+            style("尚无记录的会话。先运行 `lens proxy` 开始拦截。").dim()
+        );
         return Ok(());
     }
 
@@ -74,7 +80,13 @@ pub fn list_sessions(data_dir: &Path, limit: usize) -> Result<()> {
         };
         let msgs = style(format!("{} 条消息", session.message_count)).dim();
 
-        println!("  {} {}  {} {}", num, agent, style(&session.title).bold(), msgs);
+        println!(
+            "  {} {}  {} {}",
+            num,
+            agent,
+            style(&session.title).bold(),
+            msgs
+        );
     }
 
     println!();
@@ -109,7 +121,10 @@ pub fn show_session(data_dir: &Path, session_id: &str) -> Result<()> {
     println!();
 
     for turn in &detail.turns {
-        let timestamp = &turn.timestamp[11..19];
+        let timestamp = turn
+            .timestamp
+            .get(11..19)
+            .unwrap_or(turn.timestamp.as_str());
         let role_label = match turn.request.messages.last().map(|m| m.role.as_str()) {
             Some("user") => style("你").green().bold(),
             Some("assistant") => style("AI").blue().bold(),

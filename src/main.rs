@@ -27,31 +27,47 @@ struct Cli {
 enum Commands {
     /// 启动透明代理，拦截并记录 LLM 通信
     Proxy {
-        /// 监听地址
-        #[arg(short, long, default_value = "127.0.0.1:9999")]
-        bind: String,
+        /// 监听地址（优先级：本参数 > 配置文件 > 127.0.0.1:9999）
+        #[arg(short, long)]
+        bind: Option<String>,
 
-        /// TLS 证书目录
-        #[arg(long, default_value = "certs")]
-        cert_dir: String,
+        /// TLS 证书目录（优先级：本参数 > 配置文件 > certs）
+        #[arg(long)]
+        cert_dir: Option<String>,
+
+        /// 上游 TLS 额外信任的 CA 证书（PEM），用于企业自签网关
+        #[arg(long, value_name = "PATH")]
+        upstream_ca: Option<String>,
+
+        /// 跳过上游 TLS 证书校验（仅调试用途）
+        #[arg(long)]
+        insecure_upstream: bool,
     },
 
     /// 启动可视化面板（浏览器打开）
     View {
-        /// 监听地址
-        #[arg(short, long, default_value = "127.0.0.1:7317")]
-        bind: String,
+        /// 监听地址（优先级：本参数 > 配置文件 > 127.0.0.1:7317）
+        #[arg(short, long)]
+        bind: Option<String>,
     },
 
     /// 同时启动代理 + 面板
     Start {
-        /// 代理监听地址
-        #[arg(long, default_value = "127.0.0.1:9999")]
-        proxy_bind: String,
+        /// 代理监听地址（优先级：本参数 > 配置文件 > 127.0.0.1:9999）
+        #[arg(long)]
+        proxy_bind: Option<String>,
 
-        /// 面板监听地址
-        #[arg(long, default_value = "127.0.0.1:7317")]
-        view_bind: String,
+        /// 面板监听地址（优先级：本参数 > 配置文件 > 127.0.0.1:7317）
+        #[arg(long)]
+        view_bind: Option<String>,
+
+        /// 上游 TLS 额外信任的 CA 证书（PEM），用于企业自签网关
+        #[arg(long, value_name = "PATH")]
+        upstream_ca: Option<String>,
+
+        /// 跳过上游 TLS 证书校验（仅调试用途）
+        #[arg(long)]
+        insecure_upstream: bool,
     },
 
     /// 列出所有记录的会话
@@ -65,6 +81,21 @@ enum Commands {
     Show {
         /// 会话 ID
         session_id: String,
+    },
+
+    /// 导入会话日志（claude: JSONL；opencode: 本地 SQLite 库）
+    Import {
+        /// 来源（claude | opencode）
+        #[arg(long, default_value = "claude")]
+        source: String,
+
+        /// 文件/目录/数据库路径（claude 默认 ~/.claude/projects；opencode 默认 ~/.local/share/opencode/opencode.db）
+        #[arg(long)]
+        path: Option<String>,
+
+        /// opencode: 只导入最近 N 个会话（0 = 全部）
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
     },
 
     /// 初始化配置和数据目录
@@ -89,15 +120,25 @@ async fn main() -> ::anyhow::Result<()> {
 
     let cli = Cli::parse();
 
-    // 解析数据目录
-    let data_dir = lens_lib::engine::resolve_data_dir(cli.data_dir.as_deref())?;
+    let config = lens_lib::config::Config::load(cli.config.as_deref())?;
+    let data_dir = match cli.data_dir.as_deref() {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => match &config.storage.data_dir {
+            Some(dir) => dir.clone(),
+            None => lens_lib::engine::resolve_data_dir(None)?,
+        },
+    };
     info!("数据目录: {}", data_dir.display());
 
     match cli.command {
         Commands::Proxy {
             bind,
             cert_dir,
+            upstream_ca,
+            insecure_upstream,
         } => {
+            let bind = config.effective_proxy_bind(bind.as_deref());
+            let cert_dir = config.effective_cert_dir(cert_dir.as_deref());
             info!("🪶 Lens 代理正在启动...");
             info!("  监听地址: {}", bind);
             info!("  HTTPS 拦截: 开启");
@@ -109,22 +150,41 @@ async fn main() -> ::anyhow::Result<()> {
             println!("  💡 然后照常使用你的 agent，用法不变。");
             println!("     运行 `lens view` 打开可视化面板。");
             println!();
-            lens_lib::proxy::run(&bind, &cert_dir, &data_dir).await?;
+            let options = lens_lib::proxy::ProxyOptions {
+                upstream_tls: config
+                    .effective_upstream_tls(upstream_ca.as_deref(), insecure_upstream),
+                agents: config.agent_filter(),
+                writer: None,
+            };
+            lens_lib::proxy::run_with(&bind, &cert_dir, &data_dir, options).await?;
         }
 
         Commands::View { bind } => {
+            let bind = config.effective_view_bind(bind.as_deref());
             info!("🪶 正在启动可视化面板: http://{}", bind);
-            lens_lib::web::serve(&bind, &data_dir).await?;
+            lens_lib::web::serve(&bind, &data_dir, config.view.open_browser).await?;
         }
 
         Commands::Start {
             proxy_bind,
             view_bind,
+            upstream_ca,
+            insecure_upstream,
         } => {
             info!("🪶 Lens 全模式启动");
+            let proxy_bind = config.effective_proxy_bind(proxy_bind.as_deref());
+            let view_bind = config.effective_view_bind(view_bind.as_deref());
+            let cert_dir = config.effective_cert_dir(None);
+            let open_browser = config.view.open_browser;
+            let options = lens_lib::proxy::ProxyOptions {
+                upstream_tls: config
+                    .effective_upstream_tls(upstream_ca.as_deref(), insecure_upstream),
+                agents: config.agent_filter(),
+                writer: None,
+            };
             let proxy_data = data_dir.clone();
             let proxy_handle = tokio::spawn(async move {
-                lens_lib::proxy::run(&proxy_bind, "certs", &proxy_data)
+                lens_lib::proxy::run_with(&proxy_bind, &cert_dir, &proxy_data, options)
                     .await
                     .expect("代理启动失败");
             });
@@ -134,7 +194,7 @@ async fn main() -> ::anyhow::Result<()> {
 
             info!("📊 可视化面板: http://{}", view_bind);
             let view_handle = tokio::spawn(async move {
-                lens_lib::web::serve(&view_bind, &data_dir)
+                lens_lib::web::serve(&view_bind, &data_dir, open_browser)
                     .await
                     .expect("面板启动失败");
             });
@@ -154,6 +214,44 @@ async fn main() -> ::anyhow::Result<()> {
 
         Commands::Show { session_id } => {
             lens_lib::engine::show_session(&data_dir, &session_id)?;
+        }
+
+        Commands::Import {
+            source,
+            path,
+            limit,
+        } => {
+            let stats = match source.as_str() {
+                "claude" => {
+                    let path = match path {
+                        Some(p) => std::path::PathBuf::from(p),
+                        None => {
+                            lens_lib::import::default_claude_projects_dir().ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "无法定位默认导入目录（~/.claude/projects），请用 --path 指定"
+                                )
+                            })?
+                        }
+                    };
+                    lens_lib::import::import_claude(&data_dir, &path)?
+                }
+                "opencode" => {
+                    let db = match path {
+                        Some(p) => std::path::PathBuf::from(p),
+                        None => lens_lib::import::default_opencode_db().ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "无法定位默认 OpenCode 库（~/.local/share/opencode/opencode.db），请用 --path 指定"
+                            )
+                        })?,
+                    };
+                    lens_lib::import::import_opencode(&data_dir, &db, limit)?
+                }
+                other => anyhow::bail!("未知来源: {other}（当前支持: claude | opencode）"),
+            };
+            println!(
+                "  ✅ 导入完成: {} 个文件/库, {} 个新 turn, {} 个已存在跳过",
+                stats.files, stats.turns_imported, stats.turns_skipped
+            );
         }
 
         Commands::Init => {

@@ -8,21 +8,7 @@
  */
 import type { GraphNode, GraphData, GraphEdge } from '../types';
 
-const PALETTE: Record<string, { base: string; glow: string; label: string; sigil: string }> = {
-  character: { base: '#c9a961', glow: '#f0d48a', label: '角色', sigil: '◈' },
-  location:  { base: '#22c55e', glow: '#86efac', label: '地点', sigil: '◉' },
-  family:    { base: '#a78bfa', glow: '#ddd6fe', label: '家族', sigil: '◆' },
-  event:     { base: '#ef4444', glow: '#fca5a5', label: '事件', sigil: '✧' },
-  skill:     { base: '#f97316', glow: '#fed7aa', label: '技能', sigil: '⟐' },
-  artifact:  { base: '#06b6d4', glow: '#a5f3fc', label: '神器', sigil: '◇' },
-  theme:     { base: '#ec4899', glow: '#fbcfe8', label: '主题', sigil: '❖' },
-  file:      { base: '#6366f5', glow: '#a5b4fc', label: '文件', sigil: '▤' },
-  function:  { base: '#06b6d4', glow: '#a5f3fc', label: '函数', sigil: 'ƒ' },
-  topic:     { base: '#f59b0b', glow: '#fde68a', label: '话题', sigil: '✦' },
-};
-const UNKNOWN = { base: '#6b7280', glow: '#9ca3af', label: '其他', sigil: '●' };
-
-function palette(kind: string) { return PALETTE[kind] ?? UNKNOWN; }
+import { kindPalette as palette } from '../graph-palette';
 
 interface Props {
   node: GraphNode;
@@ -86,7 +72,7 @@ export function GraphPanel({ node, data, onClose, onJump }: Props) {
               transform="rotate(-90 24 24)" style={{ filter: 'drop-shadow(0 0 4px ' + p.base + '66)' }} />
           </svg>
           <div>
-            <div class="text-[10px] text-text-4 uppercase tracking-wider">Weight</div>
+            <div class="text-[10px] text-text-4 uppercase tracking-wider">权重</div>
             <div class="text-xl font-bold tabular-nums" style={{ color: p.glow }}>{(node.weight || 0).toFixed(1)}</div>
           </div>
         </div>
@@ -98,7 +84,7 @@ export function GraphPanel({ node, data, onClose, onJump }: Props) {
       {/* Relations list */}
       <div class="flex-1 overflow-y-auto px-5 py-3 scroll-thin">
         <div class="text-[10px] uppercase tracking-[2px] text-text-4 mb-2 font-semibold">
-          Relations ({rels.length})
+          关联（{rels.length}）
         </div>
 
         {Object.entries(groups).map(([type, group]) => (
@@ -125,13 +111,13 @@ export function GraphPanel({ node, data, onClose, onJump }: Props) {
               );
             })}
             {group.length > 8 && (
-              <div class="text-[10px] text-text-4 pl-2.5 pt-0.5">+{group.length - 8} more</div>
+              <div class="text-[10px] text-text-4 pl-2.5 pt-0.5">还有 {group.length - 8} 条</div>
             )}
           </div>
         ))}
 
         {rels.length === 0 && (
-          <div class="text-sm text-text-4 text-center py-6">No connections</div>
+          <div class="text-sm text-text-4 text-center py-6">暂无关联</div>
         )}
       </div>
     </div>

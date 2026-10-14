@@ -1,81 +1,47 @@
-/** Domain types mirrored from the Rust backend. */
+/** 前端类型出口。
+ *
+ * 接口类型全部来自 ts-rs 生成（唯一真相：Rust 结构，见 frontend/src/generated/）。
+ * 本文件只做转出与 UI 视图模型的补充定义，不再手写接口镜像。
+ */
 
-export interface SessionSummary {
-  id: string;
-  title: string;
-  model: string | null;
-  agent_type: string;
-  turn_count: number;
-  token_count: number;
-  created_at: string;
-  updated_at: string;
+export type { Session } from './generated/Session';
+export type { Session as SessionSummary } from './generated/Session';
+export type { SessionDetail } from './generated/SessionDetail';
+export type { Turn } from './generated/Turn';
+export type { LlmRequest } from './generated/LlmRequest';
+export type { LlmResponse } from './generated/LlmResponse';
+export type { Message } from './generated/Message';
+export type { MessageContent } from './generated/MessageContent';
+export type { ContentBlock } from './generated/ContentBlock';
+export type { ToolCall } from './generated/ToolCall';
+export type { TokenUsage } from './generated/TokenUsage';
+export type { Stats } from './generated/Stats';
+export type { CountStat } from './generated/CountStat';
+export type { GraphNode } from './generated/GraphNode';
+export type { GraphEdge } from './generated/GraphEdge';
+export type { Provider } from './generated/Provider';
+
+export { AGENT_COLORS, AGENT_LABELS } from './agents';
+
+import type { GraphNode } from './generated/GraphNode';
+import type { GraphEdge } from './generated/GraphEdge';
+
+/** 图谱接口返回的聚合结构（两个生成类型的组合）。 */
+export interface GraphData {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
 }
 
-export interface Message {
-  role: 'user' | 'assistant' | 'system';
+/** 时间线视图模型（由 Turn 派生，非 API 契约）。 */
+export interface ViewMessage {
+  role: string;
   content: string;
   model?: string;
   tokens?: number;
   timestamp: string;
 }
 
-export interface ToolCall {
+export interface ViewToolCall {
   name: string;
   arguments: Record<string, unknown>;
 }
-
-export interface SessionDetail {
-  id: string;
-  title: string;
-  project_path: string;
-  created_at: string;
-  updated_at: string;
-  messages: Message[];
-  tool_calls: ToolCall[];
-}
-
-export interface Stats {
-  agents: { name: string; count: number }[];
-  models: { name: string; count: number }[];
-  total_sessions: number;
-  total_tokens: number;
-  total_turns: number;
-}
-
-export interface GraphNode {
-  id: string;
-  label: string;
-  kind: string;
-  weight: number;
-}
-
-export interface GraphEdge {
-  source: string;
-  target: string;
-  relation: string;
-  weight: number;
-}
-
-export interface GraphData {
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-}
-
-/** Agent display metadata. */
-export const AGENT_COLORS: Record<string, string> = {
-  opencode: '#6366f5',
-  codex: '#f59b0b',
-  'claude-code': '#3b82f6',
-  trae: '#06b6d4',
-  'kimi-code': '#a855f7',
-  unknown: '#6b7280',
-};
-
-export const AGENT_LABELS: Record<string, string> = {
-  opencode: 'OpenCode',
-  codex: 'Codex',
-  'claude-code': 'Claude Code',
-  trae: 'Trae',
-  'kimi-code': 'Kimi Code',
-  unknown: '未知',
-};

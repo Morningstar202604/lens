@@ -73,7 +73,7 @@ async fn is_lens_ready() -> bool {
 async fn start_lens_backend() -> std::io::Result<()> {
     let exe_path = std::env::current_exe().unwrap_or_default();
     let exe_dir = exe_path.parent().unwrap_or(std::path::Path::new("."));
-    let lens_bin = exe_dir.join("lens");
+    let lens_bin = resolve_backend_binary(exe_dir);
 
     let data_dir = dirs::data_local_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -105,4 +105,20 @@ async fn start_lens_backend() -> std::io::Result<()> {
             Ok(())
         }
     }
+}
+
+/// 解析后端二进制：优先与桌面壳同目录（Windows 为 lens.exe），其次 PATH。
+fn resolve_backend_binary(exe_dir: &std::path::Path) -> std::path::PathBuf {
+    let candidates = [
+        exe_dir.join("lens.exe"),
+        exe_dir.join("lens"),
+        exe_dir.join("binaries").join("lens.exe"),
+        exe_dir.join("binaries").join("lens"),
+    ];
+    for candidate in candidates {
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    std::path::PathBuf::from("lens")
 }
