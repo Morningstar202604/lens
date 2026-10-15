@@ -15,6 +15,82 @@ use ts_rs::TS;
 /// 当前 schema 版本。迁移逻辑见 `migrate`。
 const SCHEMA_VERSION: i64 = 1;
 
+/// 会话标题里屏蔽密钥类片段时替换成的占位符。
+pub const REDACTED: &str = "[已隐藏]";
+
+/// 脱敏规则。每条以 `(^|[^A-Za-z0-9])` 捕获前导分隔符，
+/// 替换时用 `${1}[已隐藏]` 还原该分隔符。
+///
+/// 注意：这里刻意不用 `\b`。标题多为中文，而中文字符在 Unicode 词边界语义下
+/// 也是"词字符"，于是 `密钥是sk-xxx` 这种最常见的形态里 `sk` 前没有边界，
+/// 规则会整条失效（真实数据里正是这种形态）。
+const SECRET_PATTERNS: &[&str] = &[
+    // 常见提供商前缀键：sk-xxx / ghp_ / xoxb- / AKIA…
+    // 阈值取 6：标题入库前会被截断到 48 字，密钥常被截成半截（真实数据里
+    // 就出现过只剩 7 位后缀的情况），阈值过高会漏掉这些残段。
+    r"(?i)(^|[^A-Za-z0-9])((?:sk|pk|rk|ghp|gho|ghu|ghs|github_pat|xoxb|xoxp|akia|asia)[-_][A-Za-z0-9_\-]{6,})",
+    // Bearer / token 后的裸值
+    r"(?i)(^|[^A-Za-z0-9])((?:bearer|token)\s+[A-Za-z0-9._\-]{12,})",
+    // JWT（三段 base64url）
+    r"(^|[^A-Za-z0-9])(eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{4,})",
+    // key=value / key: value 形式（含引号包裹）
+    r#"(?i)(^|[^A-Za-z0-9])((?:api[_-]?key|apikey|secret|token|password|passwd|access[_-]?token|auth[_-]?token)[^A-Za-z0-9]{0,4}[:=][^A-Za-z0-9]{0,4}["']?[A-Za-z0-9._\-/+]{12,}["']?)"#,
+];
+
+lazy_static::lazy_static! {
+    /// 编译后的脱敏规则。非法正则在此直接 panic（编程错误，不应静默降级为"不脱敏"）。
+    static ref COMPILED_SECRET_PATTERNS: Vec<regex::Regex> = SECRET_PATTERNS
+        .iter()
+        .map(|p| regex::Regex::new(p).unwrap_or_else(|e| panic!("非法脱敏正则 {p:?}: {e}")))
+        .collect();
+}
+
+/// 单个高熵串的最小长度（无分隔符的连续字母数字串）。
+const HIGH_ENTROPY_MIN_LEN: usize = 32;
+
+/// 标题脱敏。会话标题取自首条用户消息，而用户常把密钥直接贴在提示里
+/// （例如"用 sk-xxx 这个 key 跑一下"）。标题会显示在面板侧边栏，
+/// 不能让凭据原文出现在屏幕、截图或分享里。
+pub fn redact_secrets(text: &str) -> String {
+    let mut out = text.to_string();
+    for re in COMPILED_SECRET_PATTERNS.iter() {
+        out = re
+            .replace_all(&out, format!("${{1}}{REDACTED}"))
+            .into_owned();
+    }
+    redact_high_entropy_runs(&out)
+}
+
+/// 兜底：把"长且字母数字混合"的连续串视为疑似密钥。
+///
+/// 用代码而非正则实现，因为需要"同时含字母和数字"这类跨字符约束，
+/// 而 Rust 正则不支持 lookahead。
+fn redact_high_entropy_runs(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut run = String::new();
+    let flush = |run: &mut String, out: &mut String| {
+        if run.len() >= HIGH_ENTROPY_MIN_LEN
+            && run.chars().any(|c| c.is_ascii_alphabetic())
+            && run.chars().any(|c| c.is_ascii_digit())
+        {
+            out.push_str(REDACTED);
+        } else {
+            out.push_str(run);
+        }
+        run.clear();
+    };
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+            run.push(ch);
+        } else {
+            flush(&mut run, &mut out);
+            out.push(ch);
+        }
+    }
+    flush(&mut run, &mut out);
+    out
+}
+
 pub struct Store {
     /// SQLite 连接（线程安全） */
     pub conn: Arc<Mutex<rusqlite::Connection>>,
@@ -225,7 +301,7 @@ impl Store {
             let model: Option<String> = row.get(6)?;
             Ok(Session {
                 id: row.get(0)?,
-                title: row.get(1)?,
+                title: redact_secrets(&row.get::<_, String>(1)?),
                 created_at: row.get(2)?,
                 updated_at: row.get(3)?,
                 message_count: row.get(4)?,
@@ -281,7 +357,7 @@ impl Store {
             let model: Option<String> = row.get(6)?;
             Ok(Session {
                 id: row.get(0)?,
-                title: row.get(1)?,
+                title: redact_secrets(&row.get::<_, String>(1)?),
                 created_at: row.get(2)?,
                 updated_at: row.get(3)?,
                 message_count: row.get(4)?,
@@ -313,7 +389,7 @@ impl Store {
             |row| {
                 Ok(Session {
                     id: row.get(0)?,
-                    title: row.get(1)?,
+                    title: redact_secrets(&row.get::<_, String>(1)?),
                     project_path: row.get(2)?,
                     created_at: row.get(3)?,
                     updated_at: row.get(4)?,
@@ -444,7 +520,10 @@ impl Store {
             };
             let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
             if !one_line.is_empty() {
-                return one_line.chars().take(48).collect();
+                // 先脱敏再截断：反过来的话密钥会被截成半截残段，
+                // 前缀规则匹配不到，残段就留在标题里了（真实数据踩过）。
+                let safe = redact_secrets(&one_line);
+                return safe.chars().take(48).collect();
             }
         }
         request
@@ -525,12 +604,37 @@ impl Store {
             .filter_map(|r| r.ok())
             .collect();
 
+        // 按天的真实活动量。timestamp 形如 "2026-10-06T18:00:00" 或带 Z，
+        // 取前 10 字符即日期；非法值被 LIKE 过滤掉。
+        let mut daily_stmt = conn.prepare(
+            "SELECT substr(timestamp, 1, 10) AS d,
+                    COUNT(*) AS turns,
+                    COALESCE(SUM(COALESCE(json_extract(response_json, '$.usage.total_tokens'), 0)), 0) AS tokens
+             FROM turns
+             WHERE timestamp LIKE '____-__-__%'
+             GROUP BY d
+             ORDER BY d DESC
+             LIMIT 90",
+        )?;
+        let mut daily: Vec<DailyStat> = daily_stmt
+            .query_map([], |r| {
+                Ok(DailyStat {
+                    date: r.get(0)?,
+                    turns: r.get(1)?,
+                    tokens: r.get(2)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        daily.reverse();
+
         Ok(Stats {
             total_sessions,
             total_turns,
             total_tokens,
             agents,
             models,
+            daily,
         })
     }
 
@@ -664,4 +768,18 @@ pub struct Stats {
     pub total_tokens: i64,
     pub agents: Vec<CountStat>,
     pub models: Vec<CountStat>,
+    /// 按天的真实活动量（用于趋势图；此前界面上的"趋势"是拿会话列表拼的假图）。
+    pub daily: Vec<DailyStat>,
+}
+
+/// 单日活动量。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../frontend/src/generated/")]
+pub struct DailyStat {
+    /// `YYYY-MM-DD`（UTC）。
+    pub date: String,
+    #[ts(type = "number")]
+    pub turns: i64,
+    #[ts(type = "number")]
+    pub tokens: i64,
 }

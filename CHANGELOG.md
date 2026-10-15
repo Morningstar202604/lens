@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2026-10-15
+
+问题驱动的全面 debug：用原始套接字探针 + 临时上游 mock 对代理做协议级注入实测，发现并修复
+5 个此前测试未覆盖的缺陷，全部先写会失败的回归测试再修。
+
+### Fixed（协议边界，均为运行时实测确认）
+
+- **请求超时缺失（高危）**：`src/proxy` 此前没有任何读超时，slowloris 式半开连接可无限占用（实测 5/5 连接 10 秒后仍被持有）。现引入分级超时：客户端请求 10s、上游连接/TLS 握手 15s、上游响应读取 300s、隧道空闲 600s、写回客户端 60s
+- **超限请求头静默 RST**：头部超 256KiB 时直接断开，客户端只看到连接重置。现回复 `431 Request Header Fields Too Large`，并排空在途字节避免 FIN 被 RST 覆盖（否则 431 到不了客户端）
+- **明文路径无 keep-alive 声明**：`handle_http` 每连接只服务一个请求，但响应不带 `Connection: close`，HTTP/1.1 客户端会尝试复用并遭 RST。现在所有明文响应（含 200/400/431/502）都显式声明关闭
+- **`Expect: 100-continue` 死锁**：客户端等放行、代理等 body，双方互等直至超时。现在本地先回 `100 Continue`，转发前剥离该头避免上游重复握手
+- **会话摘要文件去重失效**：路径正则吞掉前导空格/反引号，导致同一文件以 `` `x.py `` 与 ` x.py ` 两次入列（真实数据可见）。现统一剥离分隔符后去重
+
+### Added
+
+- 7 个代理 e2e 测试（真实 TCP/TLS + mock 上游）：原 3 个 + 超限头 431、keep-alive 声明、slowloris 超时、`Expect: 100-continue`
+- summary 模块 3 个单元测试：去重、上限、URL 不误报
+- `HttpBuf::with_read_timeout`、`read_full_request_with_timeout`、`strip_header` 等可复用原语
+
+### Verified
+
+- 代理实测复验：keep-alive 5/5、并发隧道 8×2=16/16、SSE 含 `[DONE]`、明文/流式录制入库、跨进程（代理写 + 面板读）30/30
+- 50 个测试全绿（22 单测 + 7 代理 e2e + 21 场景）、`clippy -D warnings` 0、`cargo fmt --check` 干净、`tsc` 0 错
+
 ## [0.3.0] - 2026-10-14
 
 全链路修复与重构（详见 docs/REFACTOR-AUDIT.md 与 .aqg 台账）。此前 0.2.0 的"性能优化"重构引入了

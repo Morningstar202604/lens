@@ -88,7 +88,7 @@ export function App() {
   }
 
   return (
-    <div class="flex h-screen bg-bg text-text">
+    <div class="flex h-screen bg-bg text-text font-sans text-body">
         <Sidebar
           sessions={sessions}
           stats={stats}
@@ -97,31 +97,33 @@ export function App() {
           searchQuery={searchQuery}
           onSearch={setSearchQuery}
         />
-      <main class="flex-1 overflow-y-auto p-4 md:p-6">
-        <div class="flex gap-2 mb-4">
+      <main class="flex-1 min-w-0 flex flex-col">
+        <header class="flex items-center gap-1 px-6 pt-4 pb-3 flex-shrink-0">
           <TabBtn active={tab === "dashboard"} onClick={() => setTab("dashboard")}>仪表盘</TabBtn>
           <TabBtn active={tab === "graph"} onClick={() => setTab("graph")}>知识图谱</TabBtn>
           {selectedSession && (
             <TabBtn active={tab === "session"} onClick={() => setTab("session")}>会话详情</TabBtn>
           )}
-        </div>
+        </header>
         {error && (
-          <div class="mb-3 px-3 py-2 rounded bg-red-900/30 border border-red-800/60 text-sm text-red-300">
-            数据加载失败: {error}
+          <div class="mx-6 mb-2 px-3 py-2 rounded-md bg-red-500/8 border border-red-500/25 text-note text-red-300">
+            数据加载失败：{error}
           </div>
         )}
-        {loading && sessions.length === 0 && (
-          <div class="text-center text-text-3 py-12">加载中...</div>
-        )}
-        {tab === "dashboard" && <DashboardView sessions={sessions} stats={stats} />}
-        {tab === "session" && selectedSession && <TimelineView sessionId={selectedSession} />}
-        {tab === "graph" && (
-          <GraphView
-            data={graphData}
-            onDataChange={setGraphData}
-            onSelectNode={setSelectedNode}
-          />
-        )}
+        <div class="flex-1 min-h-0">
+          {loading && sessions.length === 0 && (
+            <div class="flex items-center justify-center h-full text-text-4 text-note">加载中…</div>
+          )}
+          {tab === "dashboard" && <DashboardView sessions={sessions} stats={stats} onSelect={selectSession} />}
+          {tab === "session" && selectedSession && <TimelineView sessionId={selectedSession} />}
+          {tab === "graph" && (
+            <GraphView
+              data={graphData}
+              onDataChange={setGraphData}
+              onSelectNode={setSelectedNode}
+            />
+          )}
+        </div>
       </main>
     </div>
   );
@@ -129,8 +131,14 @@ export function App() {
 
 function TabBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: preact.ComponentChildren }) {
   return (
-    <button onClick={onClick}
-      class={`px-4 py-1.5 rounded text-sm font-medium transition-colors ${active ? "bg-primary text-white" : "bg-bg-card text-text-3 hover:text-text-2 hover:bg-bg-elev"}`}>
+    <button
+      onClick={onClick}
+      class={`px-2.5 py-1 rounded-md text-note transition-colors ${
+        active
+          ? "bg-bg-card text-text border border-border"
+          : "text-text-3 hover:text-text-2 border border-transparent"
+      }`}
+    >
       {children}
     </button>
   );

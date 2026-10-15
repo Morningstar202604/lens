@@ -21,7 +21,6 @@ pub fn summarize(data_dir: &std::path::Path, session_id: &str) -> Result<String>
     let mut user_texts: Vec<String> = Vec::new();
     let mut assistant_texts: Vec<String> = Vec::new();
     let mut tool_counts: HashMap<String, usize> = HashMap::new();
-    let mut mentioned_files: Vec<String> = Vec::new();
     let mut mentioned_topics: Vec<String> = Vec::new();
 
     for turn in turns {
@@ -51,23 +50,9 @@ pub fn summarize(data_dir: &std::path::Path, session_id: &str) -> Result<String>
         }
     }
 
-    // 提取文件路径提及（模式匹配）
-    let file_patterns: Vec<regex_lite::Regex> = P_PATH
-        .iter()
-        .filter_map(|p| regex_lite::Regex::new(p).ok())
-        .collect();
-
+    // 提取文件路径提及（模式匹配，已去重）
     let all_text = format!("{} {}", user_texts.join(" "), assistant_texts.join(" "));
-    for line in all_text.lines() {
-        for pat in &file_patterns {
-            for m in pat.find_iter(line) {
-                let s = m.as_str().to_string();
-                if !mentioned_files.contains(&s) && mentioned_files.len() < 8 {
-                    mentioned_files.push(s);
-                }
-            }
-        }
-    }
+    let mentioned_files = extract_mentioned_files(&all_text);
 
     // 检测常见编程话题
     for (keyword, topic) in P_TOPICS {
@@ -143,6 +128,35 @@ static P_PATH: &[&str] = &[
     r"(?:^|[\s`])\./[a-zA-Z0-9_./-]+",
 ];
 
+const MAX_MENTIONED_FILES: usize = 8;
+
+/// 从文本中提取提到的文件路径（去重、限 8 条）。
+///
+/// 正则为了边界匹配会吞掉前后分隔符（空格/反引号），这里统一剥离后再去重，
+/// 否则同一路径会以 "`x.py" 与 " x.py" 两种形态重复入列。
+fn extract_mentioned_files(text: &str) -> Vec<String> {
+    let patterns: Vec<regex_lite::Regex> = P_PATH
+        .iter()
+        .filter_map(|p| regex_lite::Regex::new(p).ok())
+        .collect();
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        for pat in &patterns {
+            for m in pat.find_iter(line) {
+                let s = m
+                    .as_str()
+                    .trim_matches(|c: char| c.is_whitespace() || c == '`')
+                    .to_string();
+                if s.is_empty() || out.contains(&s) || out.len() >= MAX_MENTIONED_FILES {
+                    continue;
+                }
+                out.push(s);
+            }
+        }
+    }
+    out
+}
+
 static P_TOPICS: &[(&str, &str)] = &[
     ("refactor", "代码重构"),
     ("bug", "Bug 修复"),
@@ -164,3 +178,39 @@ static P_TOPICS: &[(&str, &str)] = &[
     ("docker", "Docker 相关"),
     ("git", "Git 相关"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_mentioned_files, MAX_MENTIONED_FILES};
+
+    #[test]
+    fn mentioned_files_dedups_same_path_across_backtick_and_space() {
+        let text = "see `tests/test_mcp_split.py and  tests/test_mcp_split.py for details";
+        let files = extract_mentioned_files(text);
+        assert_eq!(
+            files,
+            vec!["tests/test_mcp_split.py".to_string()],
+            "same path must appear once regardless of surrounding separators"
+        );
+    }
+
+    #[test]
+    fn mentioned_files_keeps_distinct_paths_and_caps_count() {
+        let text = "src/a.rs src/b.rs src/c.rs";
+        let files = extract_mentioned_files(text);
+        assert_eq!(files, vec!["src/a.rs", "src/b.rs", "src/c.rs"]);
+
+        let many: String = (0..20).map(|i| format!("src/f{i}.rs ")).collect();
+        assert_eq!(extract_mentioned_files(&many).len(), MAX_MENTIONED_FILES);
+    }
+
+    #[test]
+    fn mentioned_files_ignores_urls_and_plain_words() {
+        let files =
+            extract_mentioned_files("visit https://example.com/path/page.html and just some words");
+        assert!(
+            files.is_empty(),
+            "absolutely-form URLs must not be reported as file paths, got {files:?}"
+        );
+    }
+}

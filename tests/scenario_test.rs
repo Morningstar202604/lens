@@ -1017,3 +1017,124 @@ fn test_agent_kind_maps_to_agent_type_strings() {
         assert_eq!(agent_type, expect, "UA {ua}");
     }
 }
+
+#[test]
+fn test_session_title_redacts_credentials() {
+    use lens_lib::engine::store::redact_secrets;
+
+    // 真实形态：用户把 key 直接贴在提示里，标题会显示在面板侧边栏
+    let cases = [
+        "帮我用 sk-TESTONLYabcdef1234567890 这个 key 跑一下",
+        "gitcode/badhope/，密钥是ghp_TESTONLYabcdef12345678 有一个仓库",
+        "curl -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcd'",
+        "export API_KEY=abcdef1234567890abcdef",
+        "token: xoxb-TESTONLY-000000000000",
+    ];
+    for text in cases {
+        let out = redact_secrets(text);
+        assert!(
+            out.contains(lens_lib::engine::store::REDACTED),
+            "must redact in {text:?}, got {out:?}"
+        );
+        assert!(
+            !out.contains("sk-TESTONLY") && !out.contains("ghp_TESTONLY") && !out.contains("xoxb-TESTONLY"),
+            "raw credential must not survive redaction: {out:?}"
+        );
+    }
+
+    // 正常标题不能被误伤
+    let safe = [
+        "重构 auth 模块的 JWT 校验逻辑",
+        "为什么我的 build 失败了",
+        "更新 README 里的安装步骤",
+    ];
+    for text in safe {
+        let out = redact_secrets(text);
+        assert_eq!(
+            out, text,
+            "ordinary title must pass through unchanged: {text:?}"
+        );
+    }
+}
+
+#[test]
+fn test_recorded_session_title_is_redacted_end_to_end() {
+    use lens_lib::engine::Store;
+    use lens_lib::proxy::parser::{LlmRequest, LlmResponse, Message, MessageContent, Provider};
+
+    let dir = std::env::temp_dir().join(format!("lens-redact-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let store = Store::open(&dir).expect("store opens");
+
+    let request = LlmRequest {
+        id: "t1".into(),
+        timestamp: "2026-10-15T00:00:00Z".into(),
+        provider: Provider::OpenAI,
+        endpoint: "/v1/chat/completions".into(),
+        messages: vec![Message {
+            role: "user".into(),
+            content: MessageContent::Text(
+                "用 sk-live-9f8e7d6c5b4a3210 这个 key 试试能不能连通".into(),
+            ),
+            name: None,
+        }],
+        model: Some("gpt-4o".into()),
+        temperature: None,
+        tools: None,
+        metadata: std::collections::HashMap::new(),
+    };
+    let response = LlmResponse {
+        request_id: "t1".into(),
+        timestamp: "2026-10-15T00:00:01Z".into(),
+        provider: Provider::OpenAI,
+        content: vec![],
+        tool_calls: None,
+        usage: None,
+        finish_reason: None,
+        raw: serde_json::Value::Null,
+    };
+
+    store
+        .record_turn("opencode", request, response)
+        .expect("record succeeds");
+
+    let sessions = store.list_sessions(10, 0).expect("list succeeds");
+    assert_eq!(sessions.len(), 1);
+    let title = &sessions[0].title;
+    assert!(
+        !title.contains("sk-live-9f8e7d6c5b4a3210"),
+        "credential must never reach the UI title, got {title:?}"
+    );
+    assert!(
+        title.contains(lens_lib::engine::store::REDACTED),
+        "got {title:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_truncated_credential_fragment_is_still_redacted() {
+    use lens_lib::engine::store::redact_secrets;
+
+    // 真实数据里出现的形态：密钥在长提示里被截断，只剩短后缀
+    let cases = [
+        "{\"_type\":\"newapi_channel_conn\",\"key\":\"sk-TESTONLY",
+        "配置里填 sk-ab12cd 然后重试",
+        "ghp_Ab1Cd2",
+    ];
+    for text in cases {
+        let out = redact_secrets(text);
+        assert!(
+            !out.contains("sk-TESTONLY")
+                && !out.contains("sk-ab12cd")
+                && !out.contains("ghp_Ab1Cd2"),
+            "short credential fragment must be redacted, got {out:?}"
+        );
+    }
+
+    // 不能因为放宽阈值而误伤普通短词
+    for text in ["sk-see", "task-1", "risk-2", "disk-usage"] {
+        assert_eq!(redact_secrets(text), text, "must not over-redact {text:?}");
+    }
+}

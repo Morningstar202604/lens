@@ -17,6 +17,7 @@ export type { ToolCall } from './generated/ToolCall';
 export type { TokenUsage } from './generated/TokenUsage';
 export type { Stats } from './generated/Stats';
 export type { CountStat } from './generated/CountStat';
+export type { DailyStat } from './generated/DailyStat';
 export type { GraphNode } from './generated/GraphNode';
 export type { GraphEdge } from './generated/GraphEdge';
 export type { Provider } from './generated/Provider';

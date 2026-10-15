@@ -12,6 +12,34 @@ pub const MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
 /// Maximum header block size (256 KiB).
 pub(crate) const MAX_HEADER_SIZE: usize = 262_144;
 
+/// 读取完整请求头/请求体的空闲超时。防止 slowloris 式半开连接无限占用。
+pub const IO_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// 上游连接（TCP + TLS 握手）超时。
+pub const UPSTREAM_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// 读取上游响应的空闲超时。必须显著大于模型思考间隙，否则会打断长流式响应。
+pub const UPSTREAM_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// 隧道内等待下一个客户端请求的空闲超时（agent 常复用隧道）。
+pub const TUNNEL_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// 向客户端写响应的空闲超时（客户端停止读取时释放任务）。
+pub const WRITE_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// 请求头读取失败且属于"超出大小上限"时返回此错误，
+/// 分发器据此回复 431 而不是直接断开连接。
+#[derive(Debug)]
+pub struct HeadTooLarge;
+
+impl std::fmt::Display for HeadTooLarge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "HTTP 头部超过 {MAX_HEADER_SIZE} bytes 限制")
+    }
+}
+
+impl std::error::Error for HeadTooLarge {}
+
 /// Re-export BufReader for server.rs.
 pub use tokio::io::BufReader as IoBufReader;
 
@@ -21,7 +49,10 @@ pub async fn read_http_headers<S: AsyncReadExt + Unpin>(stream: &mut S) -> Resul
     let mut data = Vec::new();
     let mut buf = [0u8; 8192];
     loop {
-        let n = stream.read(&mut buf).await?;
+        let n = match tokio::time::timeout(IO_IDLE_TIMEOUT, stream.read(&mut buf)).await {
+            Ok(r) => r?,
+            Err(_) => anyhow::bail!("读取请求头超时（{IO_IDLE_TIMEOUT:?} 无数据）"),
+        };
         if n == 0 {
             break;
         }
@@ -30,7 +61,7 @@ pub async fn read_http_headers<S: AsyncReadExt + Unpin>(stream: &mut S) -> Resul
             break;
         }
         if data.len() > MAX_HEADER_SIZE {
-            anyhow::bail!("HTTP 头部超过 {MAX_HEADER_SIZE} bytes 限制");
+            return Err(HeadTooLarge.into());
         }
     }
     Ok(data)
@@ -134,6 +165,31 @@ pub fn find_content_length_str(s: &str) -> Option<usize> {
     None
 }
 
+/// 去掉请求头中指定的头部（大小写不敏感），保留其余部分与 body。
+/// 例子：代理已本地处理 `Expect: 100-continue`，转发前必须剥离，否则上游会再走一遍 interim 握手。
+pub fn strip_header(req: &[u8], name: &str) -> Vec<u8> {
+    let head_end = match req.windows(4).position(|w| w == b"\r\n\r\n") {
+        Some(p) => p,
+        None => return req.to_vec(),
+    };
+    let want = format!("{}:", name.to_lowercase());
+    let head = String::from_utf8_lossy(&req[..head_end]);
+    let mut out = Vec::with_capacity(req.len());
+    for (i, line) in head.split("\r\n").enumerate() {
+        if i == 0 {
+            out.extend_from_slice(line.as_bytes());
+            continue;
+        }
+        if line.to_lowercase().starts_with(&want) {
+            continue;
+        }
+        out.extend_from_slice(b"\r\n");
+        out.extend_from_slice(line.as_bytes());
+    }
+    out.extend_from_slice(&req[head_end..]);
+    out
+}
+
 /// Extract `Host` value (with port) from a request string.
 pub fn extract_host_header(req: &str) -> Option<String> {
     for line in req.split("\r\n") {
@@ -162,6 +218,16 @@ pub async fn read_full_request<S: AsyncReadExt + Unpin>(
     prefix: &[u8],
     stream: &mut S,
 ) -> Result<Vec<u8>> {
+    read_full_request_with_timeout(prefix, stream, IO_IDLE_TIMEOUT).await
+}
+
+/// 同 [`read_full_request`]，但指定空闲超时。
+/// 隧道内等待客户端下一个请求时用更长的窗口（agent 会复用隧道并间隔发送）。
+pub async fn read_full_request_with_timeout<S: AsyncReadExt + Unpin>(
+    prefix: &[u8],
+    stream: &mut S,
+    idle: std::time::Duration,
+) -> Result<Vec<u8>> {
     let mut data = prefix.to_vec();
     let mut buf = [0u8; 8192];
 
@@ -169,7 +235,10 @@ pub async fn read_full_request<S: AsyncReadExt + Unpin>(
         if data.windows(4).any(|w| w == b"\r\n\r\n") {
             break;
         }
-        let n = stream.read(&mut buf).await?;
+        let n = match tokio::time::timeout(idle, stream.read(&mut buf)).await {
+            Ok(r) => r?,
+            Err(_) => anyhow::bail!("读取请求超时（{idle:?} 无数据）"),
+        };
         if n == 0 {
             break;
         }
@@ -179,7 +248,7 @@ pub async fn read_full_request<S: AsyncReadExt + Unpin>(
         }
     }
 
-    read_http_body(&mut data, stream).await?;
+    read_http_body_with_timeout(&mut data, stream, idle).await?;
     Ok(data)
 }
 
@@ -187,6 +256,15 @@ pub async fn read_full_request<S: AsyncReadExt + Unpin>(
 pub async fn read_http_body<S: AsyncReadExt + Unpin>(
     data: &mut Vec<u8>,
     stream: &mut S,
+) -> Result<()> {
+    read_http_body_with_timeout(data, stream, IO_IDLE_TIMEOUT).await
+}
+
+/// 同 [`read_http_body`]，但指定空闲超时。
+pub async fn read_http_body_with_timeout<S: AsyncReadExt + Unpin>(
+    data: &mut Vec<u8>,
+    stream: &mut S,
+    idle: std::time::Duration,
 ) -> Result<()> {
     let header_end = data
         .windows(4)
@@ -204,7 +282,10 @@ pub async fn read_http_body<S: AsyncReadExt + Unpin>(
 
     let mut buf = [0u8; 8192];
     while data.len() < total_needed {
-        let n = stream.read(&mut buf).await?;
+        let n = match tokio::time::timeout(idle, stream.read(&mut buf)).await {
+            Ok(r) => r?,
+            Err(_) => anyhow::bail!("读取请求体超时（{idle:?} 无数据）"),
+        };
         if n == 0 {
             break;
         }

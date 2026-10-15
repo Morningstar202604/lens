@@ -9,6 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tracing::info;
 
@@ -110,7 +111,21 @@ async fn dispatch_connection(
     store: Arc<Store>,
     options: ProxyOptions,
 ) -> Result<()> {
-    let head = read_http_headers(&mut stream).await?;
+    let head = match read_http_headers(&mut stream).await {
+        Ok(h) => h,
+        Err(e) => {
+            if e.downcast_ref::<super::io::HeadTooLarge>().is_some() {
+                // 明确拒绝而不是静默断开，客户端能给出可读报错。
+                let resp = "HTTP/1.1 431 Request Header Fields Too Large\r\n\
+                            Content-Length: 0\r\nConnection: close\r\n\r\n";
+                let _ = stream.write_all(resp.as_bytes()).await;
+                // 客户端可能还在往外发剩余头部；带未读数据直接 close 会触发 RST，
+                // 客户端就看不到这个 431。先把在途数据排空再优雅关闭。
+                drain_inflight(&mut stream).await;
+            }
+            return Err(e);
+        }
+    };
     if head.is_empty() {
         return Ok(());
     }
@@ -131,3 +146,26 @@ async fn dispatch_connection(
 // Re-exports for backwards compatibility.
 pub use super::connect::handle_connect;
 pub use super::http_handler::handle_http;
+
+/// 排空客户端在途字节（限时、限量的 best-effort），
+/// 让随后的 close 走 FIN 而不是 RST，确保已写出的错误响应能到达客户端。
+async fn drain_inflight(stream: &mut TcpStream) {
+    use tokio::io::AsyncReadExt;
+    let mut sink = [0u8; 8192];
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+    loop {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            stream.read(&mut sink),
+        )
+        .await
+        {
+            Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+            Ok(Ok(_)) => continue,
+        }
+    }
+    let _ = stream.shutdown().await;
+}

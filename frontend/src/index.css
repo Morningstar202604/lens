@@ -6,26 +6,85 @@
   :root {
     color-scheme: dark;
   }
-  html.light {
-    color-scheme: light;
+  html,
+  body {
+    height: 100%;
   }
   body {
     overflow: hidden;
+    /* 数值用等宽 + tabular，纵向扫读时数字才能对齐 */
+    font-feature-settings: 'tnum' 1;
+  }
+  /* 键盘可见焦点（鼠标点击不显示） */
+  :focus-visible {
+    outline: 2px solid rgba(94, 224, 245, 0.55);
+    outline-offset: 2px;
+    border-radius: 3px;
   }
 }
 
-@layer components {
+@layer utilities {
   .scroll-thin::-webkit-scrollbar {
-    width: 5px;
+    width: 8px;
+    height: 8px;
   }
   .scroll-thin::-webkit-scrollbar-track {
     background: transparent;
   }
   .scroll-thin::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: content-box;
   }
   .scroll-thin::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.2);
+    background: rgba(255, 255, 255, 0.18);
+    background-clip: content-box;
+  }
+}
+
+/* Markdown 正文：控制行宽与字号，避免长文横向铺满 */
+@layer components {
+  .prose-lens {
+    @apply prose prose-invert prose-sm max-w-none;
+  }
+  .prose-lens :where(p, ul, ol) {
+    @apply text-text-2;
+  }
+  .prose-lens :where(h1, h2, h3, h4) {
+    @apply text-text;
+  }
+  .prose-lens :where(code) {
+    @apply text-primary/90 font-mono text-[0.9em];
+  }
+  .prose-lens :where(pre) {
+    @apply bg-bg border border-border-dim rounded-md;
+  }
+  .prose-lens :where(a) {
+    @apply text-primary;
+  }
+  .prose-lens :where(blockquote) {
+    @apply border-l-border text-text-3;
+  }
+}
+
+/* 尊重系统的减少动效偏好 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* 图谱标签：非高权重节点默认不喊话（悬停/聚焦时才显示） */
+@layer utilities {
+  .node-label {
+    transition: opacity 0.15s ease-out;
+  }
+  .label-dim {
+    opacity: 0;
   }
 }

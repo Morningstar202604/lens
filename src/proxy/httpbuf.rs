@@ -6,12 +6,16 @@
 use anyhow::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use super::io::{find_content_length_str, is_chunked, MAX_BODY_SIZE, MAX_HEADER_SIZE};
+use super::io::{
+    find_content_length_str, is_chunked, MAX_BODY_SIZE, MAX_HEADER_SIZE, UPSTREAM_READ_TIMEOUT,
+};
 
 pub struct HttpBuf<S> {
     stream: S,
     buf: Vec<u8>,
     pos: usize,
+    /// 上游读取空闲超时（可调，默认 [`UPSTREAM_READ_TIMEOUT`]）。
+    read_timeout: std::time::Duration,
 }
 
 impl<S: AsyncReadExt + Unpin> HttpBuf<S> {
@@ -20,7 +24,14 @@ impl<S: AsyncReadExt + Unpin> HttpBuf<S> {
             stream,
             buf: Vec::new(),
             pos: 0,
+            read_timeout: UPSTREAM_READ_TIMEOUT,
         }
+    }
+
+    /// 覆盖上游读取空闲超时。
+    pub fn with_read_timeout(mut self, t: std::time::Duration) -> Self {
+        self.read_timeout = t;
+        self
     }
 
     /// 取出底层流用于写（请求转发等）。
@@ -42,7 +53,9 @@ impl<S: AsyncReadExt + Unpin> HttpBuf<S> {
     async fn fill(&mut self) -> Result<usize> {
         self.compact();
         let mut tmp = [0u8; 8192];
-        let n = self.stream.read(&mut tmp).await?;
+        let n = tokio::time::timeout(self.read_timeout, self.stream.read(&mut tmp))
+            .await
+            .map_err(|_| anyhow::anyhow!("读取上游超时（{:?} 无数据）", self.read_timeout))??;
         if n > 0 {
             self.buf.extend_from_slice(&tmp[..n]);
         }

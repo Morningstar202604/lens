@@ -503,3 +503,282 @@ async fn https_connect_tunnel_is_forwarded_and_recorded() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ───────────────────────── 边界回归（debug 收官） ─────────────────────────
+//
+// 以下四个测试锁定运行时探测确认的缺陷，修复前必须失败。
+
+/// B1: 超限请求头必须得到 HTTP 431 响应，而不是连接被 RST/静默丢弃。
+#[tokio::test(flavor = "multi_thread")]
+async fn oversized_request_head_gets_431_not_reset() {
+    let dir = temp_dir("hdr431");
+    let proxy_port = free_port();
+    let data_dir = dir.join("data");
+    let cert_dir = dir.join("certs");
+    tokio::spawn({
+        let data_dir = data_dir.clone();
+        let cert_dir = cert_dir.clone();
+        async move {
+            lens_lib::proxy::run(
+                &format!("127.0.0.1:{proxy_port}"),
+                cert_dir.to_str().unwrap(),
+                &data_dir,
+            )
+            .await
+            .unwrap();
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    let client = async {
+        let mut s = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
+        let mut req = Vec::new();
+        req.extend_from_slice(b"GET http://127.0.0.1:1/ HTTP/1.1\r\nHost: 127.0.0.1:1\r\nX-Big: ");
+        req.extend_from_slice(&vec![b'a'; 300_000]);
+        req.extend_from_slice(b"\r\n\r\n");
+        s.write_all(&req).await.unwrap();
+        let mut resp = Vec::new();
+        let _ = s.read_to_end(&mut resp).await;
+        resp
+    };
+    let resp = tokio::time::timeout(TEST_TIMEOUT, client)
+        .await
+        .expect("client hung waiting for oversized-head reply");
+
+    let text = String::from_utf8_lossy(&resp);
+    assert!(
+        text.starts_with("HTTP/1.1 431"),
+        "oversized head must get 431, got: {:?}",
+        &text[..text.len().min(80)]
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// B2: 明文连接必须显式告知连接会关闭（Connection: close），不得让客户端
+/// 复用后被 RST。响应头缺失时 HTTP/1.1 客户端默认 keep-alive，因此必须显式声明。
+#[tokio::test(flavor = "multi_thread")]
+async fn plain_http_response_declares_connection_close() {
+    let dir = temp_dir("cls");
+    let (proxy_port, upstream_port) = (free_port(), free_port());
+
+    tokio::spawn(async move {
+        let listener = TcpListener::bind(("127.0.0.1", upstream_port))
+            .await
+            .unwrap();
+        let (mut conn, _) = listener.accept().await.unwrap();
+        let _ = read_http_message(&mut conn).await;
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            MOCK_REPLY.len(),
+            MOCK_REPLY
+        );
+        let _ = conn.write_all(resp.as_bytes()).await;
+        let _ = conn.shutdown().await;
+    });
+
+    let data_dir = dir.join("data");
+    let cert_dir = dir.join("certs");
+    tokio::spawn({
+        let data_dir = data_dir.clone();
+        let cert_dir = cert_dir.clone();
+        async move {
+            lens_lib::proxy::run(
+                &format!("127.0.0.1:{proxy_port}"),
+                cert_dir.to_str().unwrap(),
+                &data_dir,
+            )
+            .await
+            .unwrap();
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    let body = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"close me"}]}"#;
+    let request = format!(
+        "POST http://127.0.0.1:{upstream_port}/v1/chat/completions HTTP/1.1\r\n\
+         Host: 127.0.0.1:{upstream_port}\r\n\
+         User-Agent: opencode/1.0\r\n\
+         Content-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+
+    let client = async {
+        let mut s = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
+        s.write_all(request.as_bytes()).await.unwrap();
+        let mut resp = Vec::new();
+        let _ = s.read_to_end(&mut resp).await;
+        resp
+    };
+    let resp = tokio::time::timeout(TEST_TIMEOUT, client)
+        .await
+        .expect("client hung on plain HTTP request");
+    let head = String::from_utf8_lossy(&resp[..resp.len().min(400)]).to_lowercase();
+
+    assert!(
+        head.contains("connection: close") || head.contains("connection:close"),
+        "proxy must tell the client the connection closes (no silent reuse-then-RST), got: {:?}",
+        &head[..head.len().min(200)]
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// B3: 半开连接（缓慢头部）必须被读超时关闭，不能无限占用。
+#[tokio::test(flavor = "multi_thread")]
+async fn slow_client_head_is_timed_out() {
+    let dir = temp_dir("slow");
+    let proxy_port = free_port();
+    let data_dir = dir.join("data");
+    let cert_dir = dir.join("certs");
+    tokio::spawn({
+        let data_dir = data_dir.clone();
+        let cert_dir = cert_dir.clone();
+        async move {
+            lens_lib::proxy::run(
+                &format!("127.0.0.1:{proxy_port}"),
+                cert_dir.to_str().unwrap(),
+                &data_dir,
+            )
+            .await
+            .unwrap();
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    // Send an incomplete head, then stop writing. The proxy must close it well
+    // within the idle window instead of holding the socket forever.
+    let mut s = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
+    s.write_all(b"GET http://127.0.0.1:1/ HTTP/1.1\r\nHost: 127.0.0.1:1\r\nX-Partial: ")
+        .await
+        .unwrap();
+
+    let closed = tokio::time::timeout(Duration::from_secs(12), async {
+        let mut buf = [0u8; 256];
+        loop {
+            match s.read(&mut buf).await {
+                Ok(0) => break true,
+                Ok(_) => continue,
+                Err(_) => break true,
+            }
+        }
+    })
+    .await;
+
+    assert_eq!(
+        closed,
+        Ok(true),
+        "proxy must close a half-open slowloris connection within 12s"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// B4: 声明 Expect: 100-continue 的客户端必须先收到 interim 100，
+/// 否则客户端在等放行、代理在等 body，双方互等直至超时。
+#[tokio::test(flavor = "multi_thread")]
+async fn expect_100_continue_is_answered_before_body() {
+    let dir = temp_dir("ec100");
+    let (proxy_port, upstream_port) = (free_port(), free_port());
+
+    tokio::spawn(async move {
+        let listener = TcpListener::bind(("127.0.0.1", upstream_port))
+            .await
+            .unwrap();
+        let (mut conn, _) = listener.accept().await.unwrap();
+        let _ = read_http_message(&mut conn).await;
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            MOCK_REPLY.len(),
+            MOCK_REPLY
+        );
+        let _ = conn.write_all(resp.as_bytes()).await;
+        let _ = conn.shutdown().await;
+    });
+
+    let data_dir = dir.join("data");
+    let cert_dir = dir.join("certs");
+    tokio::spawn({
+        let data_dir = data_dir.clone();
+        let cert_dir = cert_dir.clone();
+        async move {
+            lens_lib::proxy::run(
+                &format!("127.0.0.1:{proxy_port}"),
+                cert_dir.to_str().unwrap(),
+                &data_dir,
+            )
+            .await
+            .unwrap();
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    let body = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"expect"}]}"#;
+    let head = format!(
+        "POST http://127.0.0.1:{upstream_port}/v1/chat/completions HTTP/1.1\r\n\
+         Host: 127.0.0.1:{upstream_port}\r\n\
+         User-Agent: opencode/1.0\r\n\
+         Expect: 100-continue\r\n\
+         Content-Length: {}\r\n\r\n",
+        body.len()
+    );
+
+    let mut s = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
+    s.write_all(head.as_bytes()).await.unwrap();
+
+    // 读 interim：必须在客户端发送 body 之前到达。
+    let interim = tokio::time::timeout(Duration::from_secs(8), async {
+        let mut buf = [0u8; 512];
+        let mut acc = Vec::new();
+        loop {
+            let n = s.read(&mut buf).await.unwrap_or(0);
+            if n == 0 {
+                break;
+            }
+            acc.extend_from_slice(&buf[..n]);
+            if acc.windows(4).any(|w| w == b"\r\n\r\n") {
+                break;
+            }
+        }
+        acc
+    })
+    .await
+    .expect("no interim response -> client and proxy deadlock on Expect");
+
+    let interim_text = String::from_utf8_lossy(&interim);
+    assert!(
+        interim_text.starts_with("HTTP/1.1 100"),
+        "proxy must answer 100 Continue before the client sends the body, got: {interim_text:?}"
+    );
+
+    // 放行后发 body，必须拿到最终响应。
+    s.write_all(body.as_bytes()).await.unwrap();
+    let final_resp = tokio::time::timeout(Duration::from_secs(8), async {
+        let mut acc = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            let n = s.read(&mut buf).await.unwrap_or(0);
+            if n == 0 {
+                break;
+            }
+            acc.extend_from_slice(&buf[..n]);
+            if acc.len() > 40 && String::from_utf8_lossy(&acc).contains("Non-stream reply") {
+                break;
+            }
+        }
+        acc
+    })
+    .await
+    .expect("no final response after 100 Continue");
+
+    assert!(
+        String::from_utf8_lossy(&final_resp).starts_with("HTTP/1.1 200"),
+        "after the interim 100 the real response must follow"
+    );
+
+    let turns = wait_for_turns(&data_dir.join("lens.db"), 1).await;
+    assert_eq!(turns, 1, "the expect-continue request must be recorded");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

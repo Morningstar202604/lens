@@ -19,7 +19,7 @@ use tracing::{info, warn};
 
 use super::cert::CertManagerArc;
 use super::httpbuf::HttpBuf;
-use super::io::read_full_request;
+use super::io::{read_full_request_with_timeout, TUNNEL_IDLE_TIMEOUT, UPSTREAM_CONNECT_TIMEOUT};
 use super::parser::Provider;
 use super::request::parse_request_data;
 use super::server::ProxyOptions;
@@ -58,30 +58,54 @@ pub async fn handle_connect(
     info!("CONNECT → {}", target);
 
     // ── 上游 TCP + TLS ─────────────────────────────────────────
-    let upstream_tcp = match TcpStream::connect(target).await {
-        Ok(s) => s,
-        Err(e) => {
-            send_gateway_error(
-                &mut client_stream,
-                format!("连接上游失败 {}: {}", target, e),
-            )
-            .await?;
-            anyhow::bail!("连接上游 TCP 失败: {}", e);
-        }
-    };
-
-    let upstream_tls_stream =
-        match tls_connect_upstream(upstream_tcp, host, &options.upstream_tls).await {
-            Ok(s) => s,
-            Err(e) => {
+    let upstream_tcp =
+        match tokio::time::timeout(UPSTREAM_CONNECT_TIMEOUT, TcpStream::connect(target)).await {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
                 send_gateway_error(
                     &mut client_stream,
-                    format!("TLS 上游握手失败 {}: {}", target, e),
+                    format!("连接上游失败 {}: {}", target, e),
                 )
                 .await?;
-                anyhow::bail!("TLS 上游握手失败 {}: {}", target, e);
+                anyhow::bail!("连接上游 TCP 失败: {}", e);
+            }
+            Err(_) => {
+                send_gateway_error(
+                    &mut client_stream,
+                    format!("连接上游超时 {}（{UPSTREAM_CONNECT_TIMEOUT:?}）", target),
+                )
+                .await?;
+                anyhow::bail!("连接上游 TCP 超时: {}", target);
             }
         };
+
+    let upstream_tls_stream = match tokio::time::timeout(
+        UPSTREAM_CONNECT_TIMEOUT,
+        tls_connect_upstream(upstream_tcp, host, &options.upstream_tls),
+    )
+    .await
+    {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
+            send_gateway_error(
+                &mut client_stream,
+                format!("TLS 上游握手失败 {}: {}", target, e),
+            )
+            .await?;
+            anyhow::bail!("TLS 上游握手失败 {}: {}", target, e);
+        }
+        Err(_) => {
+            send_gateway_error(
+                &mut client_stream,
+                format!(
+                    "TLS 上游握手超时 {}（{UPSTREAM_CONNECT_TIMEOUT:?}）",
+                    target
+                ),
+            )
+            .await?;
+            anyhow::bail!("TLS 上游握手超时: {}", target);
+        }
+    };
     let mut upstream = HttpBuf::new(upstream_tls_stream);
 
     // ── 告知客户端隧道已建立 ───────────────────────────────────
@@ -101,18 +125,19 @@ pub async fn handle_connect(
     // ── 复用隧道：循环读取完整请求直到连接关闭 ─────────────────
     let mut tls_client = tls_client;
     loop {
-        let req_data = match read_full_request(&[], &mut tls_client).await {
-            Ok(d) => {
-                if d.is_empty() {
+        let req_data =
+            match read_full_request_with_timeout(&[], &mut tls_client, TUNNEL_IDLE_TIMEOUT).await {
+                Ok(d) => {
+                    if d.is_empty() {
+                        break;
+                    }
+                    d
+                }
+                Err(e) => {
+                    tracing::debug!("读取请求失败 (断连): {}", e);
                     break;
                 }
-                d
-            }
-            Err(e) => {
-                tracing::debug!("读取请求失败 (断连): {}", e);
-                break;
-            }
-        };
+            };
 
         let parsed = parse_request_data(&req_data);
 
