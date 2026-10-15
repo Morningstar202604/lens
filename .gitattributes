@@ -1,0 +1,4 @@
+# 构建产物与模板统一 LF：CI（Linux）重建产物为 LF，
+# web/index.html 若以 CRLF 入库会导致「Committed web assets must match the build」门禁误红。
+web/** text eol=lf
+frontend/index.html text eol=lf
