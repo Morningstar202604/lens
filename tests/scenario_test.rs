@@ -1037,7 +1037,9 @@ fn test_session_title_redacts_credentials() {
             "must redact in {text:?}, got {out:?}"
         );
         assert!(
-            !out.contains("sk-TESTONLY") && !out.contains("ghp_TESTONLY") && !out.contains("xoxb-TESTONLY"),
+            !out.contains("sk-TESTONLY")
+                && !out.contains("ghp_TESTONLY")
+                && !out.contains("xoxb-TESTONLY"),
             "raw credential must not survive redaction: {out:?}"
         );
     }
